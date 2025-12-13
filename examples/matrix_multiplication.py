@@ -30,8 +30,7 @@ def main():
 
     # Create GGML context with automatic memory allocation
     ctx_size = 100 * 1024  # 100KB should be sufficient
-    params = ggml.InitParams(mem_size=ctx_size, no_alloc=False)
-    ctx = ggml.init(params)
+    ctx = ggml.context_init(mem_size=ctx_size, no_alloc=False)
 
     # Create tensors
     # Note: new_tensor_2d takes (columns, rows)
@@ -94,7 +93,7 @@ def main():
         print(f"Computation failed with status: {status}")
 
     # Free memory
-    ggml.free(ctx)
+    ggml.context_free(ctx)
 
 
 if __name__ == "__main__":

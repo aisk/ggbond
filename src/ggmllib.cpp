@@ -51,20 +51,13 @@ PYBIND11_MODULE(ggml, m) {
         .value("ABORTED", GGML_STATUS_ABORTED)
         .export_values();
 
-    // Bind ggml_init_params struct
-    py::class_<ggml_init_params>(m, "InitParams")
-        .def(py::init<size_t, void*, bool>(),
-             py::arg("mem_size") = 0,
-             py::arg("mem_buffer") = nullptr,
-             py::arg("no_alloc") = false)
-        .def_readwrite("mem_size", &ggml_init_params::mem_size)
-        .def_readwrite("mem_buffer", &ggml_init_params::mem_buffer)
-        .def_readwrite("no_alloc", &ggml_init_params::no_alloc);
-
     m.def("backend_cpu_init", []() { return static_cast<void*>(ggml_backend_cpu_init()); }, "Initialize CPU backend");
     m.def("backend_is_cpu", [](void* backend) { return ggml_backend_is_cpu(static_cast<ggml_backend_t>(backend)); }, "Check if backend is CPU backend", py::arg("backend"));
     m.def("tensor_overhead", &ggml_tensor_overhead, "Get the memory overhead of a tensor");
-    m.def("init", [](const ggml_init_params& params) { return static_cast<void*>(ggml_init(params)); }, "Initialize GGML context", py::arg("params"));
+    m.def("context_init", [](size_t mem_size, void* mem_buffer = nullptr, bool no_alloc = false) {
+        ggml_init_params params = {mem_size, mem_buffer, no_alloc};
+        return static_cast<void*>(ggml_init(params));
+    }, "Initialize GGML context", py::arg("mem_size"), py::arg("mem_buffer") = nullptr, py::arg("no_alloc") = false);
     m.def("new_tensor_2d", [](void* ctx, ggml_type type, int64_t ne0, int64_t ne1) {
         return static_cast<void*>(ggml_new_tensor_2d(
             static_cast<ggml_context*>(ctx),
@@ -123,7 +116,7 @@ PYBIND11_MODULE(ggml, m) {
             n_threads
         );
     }, "Compute the graph with given context and thread count", py::arg("ctx"), py::arg("cgraph"), py::arg("n_threads") = 1);
-    m.def("free", [](void* ctx) {
+    m.def("context_free", [](void* ctx) {
         ggml_free(static_cast<ggml_context*>(ctx));
     }, "Free GGML context and all its allocated memory", py::arg("ctx"));
     m.def("get_data", [](void* tensor) {
