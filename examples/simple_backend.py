@@ -3,6 +3,12 @@ import numpy as np
 import ctypes
 
 def main():
+    # Set default log callback
+    ggml.log_set_default()
+
+    # Initialize time measurement - call this once at the beginning of the program
+    ggml.time_init()
+
     rows_a, cols_a = 4, 2
     a = np.array([
         2, 8,

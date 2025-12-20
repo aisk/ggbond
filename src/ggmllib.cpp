@@ -51,6 +51,7 @@ PYBIND11_MODULE(ggml, m) {
         .value("ABORTED", GGML_STATUS_ABORTED)
         .export_values();
 
+    m.def("log_set_default", []() {  }, "");
     m.def("backend_cpu_init", []() { return static_cast<void*>(ggml_backend_cpu_init()); }, "Initialize CPU backend");
     m.def("backend_is_cpu", [](void* backend) { return ggml_backend_is_cpu(static_cast<ggml_backend_t>(backend)); }, "Check if backend is CPU backend", py::arg("backend"));
     m.def("tensor_overhead", &ggml_tensor_overhead, "Get the memory overhead of a tensor");
@@ -126,4 +127,7 @@ PYBIND11_MODULE(ggml, m) {
     m.def("get_data_f32", [](void* tensor) {
         return reinterpret_cast<uintptr_t>(ggml_get_data_f32(static_cast<ggml_tensor*>(tensor)));
     }, "Get float32 data pointer from tensor (as uintptr_t)", py::arg("tensor"));
+    m.def("time_init", []() {
+        ggml_time_init();
+    }, "Initialize time measurement - call this once at the beginning of the program");
 }
