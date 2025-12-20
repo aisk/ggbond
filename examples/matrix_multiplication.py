@@ -3,97 +3,84 @@ import numpy as np
 import ctypes
 
 def main():
-    rows_A, cols_A = 4, 2
-    matrix_A = np.array([
+    rows_a, cols_a = 4, 2
+    a = np.array([
         2, 8,
         5, 1,
         4, 2,
         8, 6
     ], dtype=np.float32)
 
-    rows_B, cols_B = 3, 2
-    matrix_B = np.array([
+    rows_b, cols_b = 3, 2
+    b = np.array([
         10, 5,
         9, 9,
         5, 4
     ], dtype=np.float32)
 
-    print("Matrix A ({}x{}):".format(rows_A, cols_A))
-    print(matrix_A.reshape(rows_A, cols_A))
-    print("Matrix B ({}x{}):".format(rows_B, cols_B))
-    print(matrix_B.reshape(rows_B, cols_B))
+    print("Matrix A ({}x{}):".format(rows_a, cols_a))
+    print(a.reshape(rows_a, cols_a))
+    print("Matrix B ({}x{}):".format(rows_b, cols_b))
+    print(b.reshape(rows_b, cols_b))
 
-    # Calculate expected result for reference
-    expected = np.dot(matrix_A.reshape(rows_A, cols_A), matrix_B.reshape(rows_B, cols_B).T)
-    print("Expected result A * B^T ({}x{}):".format(rows_A, rows_B))
+    expected = np.dot(a.reshape(rows_a, cols_a), b.reshape(rows_b, cols_b).T)
+    print("Expected result A * B^T ({}x{}):".format(rows_a, rows_b))
     print(expected)
 
-    # Create GGML context with automatic memory allocation
-    ctx_size = 100 * 1024  # 100KB should be sufficient
-    ctx = ggml.context_init(mem_size=ctx_size, no_alloc=False)
+    num_tensors = 2
+    model_ctx = ggml.context_init(mem_size=ggml.tensor_overhead() * num_tensors + 512, no_alloc=True)
 
-    # Create tensors
-    # Note: new_tensor_2d takes (columns, rows)
-    tensor_a = ggml.new_tensor_2d(ctx, ggml.Type.F32, cols_A, rows_A)
-    tensor_b = ggml.new_tensor_2d(ctx, ggml.Type.F32, cols_B, rows_B)
+    backend = ggml.backend_cpu_init()
 
-    # Set tensor data
-    ptr_a = ggml.get_data_f32(tensor_a)
-    ptr_b = ggml.get_data_f32(tensor_b)
-    ptr_a_ctypes = ctypes.cast(ptr_a, ctypes.POINTER(ctypes.c_float))
-    ptr_b_ctypes = ctypes.cast(ptr_b, ctypes.POINTER(ctypes.c_float))
+    tensor_a = ggml.new_tensor_2d(model_ctx, ggml.Type.F32, cols_a, rows_a)
+    tensor_b = ggml.new_tensor_2d(model_ctx, ggml.Type.F32, cols_b, rows_b)
 
-    # Copy data to tensors (equivalent to memcpy in C)
-    for i in range(matrix_A.size):
-        ptr_a_ctypes[i] = matrix_A[i]
+    ggml.backend_alloc_ctx_tensors(model_ctx, backend)
 
-    for i in range(matrix_B.size):
-        ptr_b_ctypes[i] = matrix_B[i]
+    ggml.backend_tensor_set(tensor_a, a.astype(np.float32), 0, 0)
+    ggml.backend_tensor_set(tensor_b, b.astype(np.float32), 0, 0)
 
-    # Create computation graph
-    graph = ggml.new_graph(ctx)
+    print("Successfully set tensor data using backend_tensor_set")
 
-    # Create matrix multiplication: result = a * b^T
-    result = ggml.mul_mat(ctx, tensor_a, tensor_b)
+    graph_ctx_size = ggml.tensor_overhead() * 100 + ggml.graph_overhead()
+    compute_ctx = ggml.context_init(mem_size=graph_ctx_size + 512, no_alloc=True)
+    gf = ggml.new_graph(compute_ctx)
 
-    # Build forward computation graph
-    ggml.build_forward_expand(graph, result)
+    result = ggml.mul_mat(compute_ctx, tensor_a, tensor_b)
 
-    # Execute computation
+    ggml.build_forward_expand(gf, result)
+
+    ggml.backend_alloc_ctx_tensors(compute_ctx, backend)
+
     n_threads = 1
-    status = ggml.graph_compute_with_ctx(ctx, graph, n_threads)
+    status = ggml.graph_compute_with_ctx(compute_ctx, gf, n_threads)
 
     if status == ggml.Status.SUCCESS:
-        # Read result data
         ptr_result = ggml.get_data_f32(result)
         ptr_result_ctypes = ctypes.cast(ptr_result, ctypes.POINTER(ctypes.c_float))
 
-        # Read the result values
         result_values = []
-        for i in range(12):  # Expect 4x3 = 12 elements
+        for i in range(12):
             result_values.append(ptr_result_ctypes[i])
 
-        # GGML stores results in column-major order
-        # Reconstruct the 4x3 matrix
         result_matrix = np.zeros((4, 3), dtype=np.float32)
-        result_matrix[:, 0] = result_values[0:4]   # First column
-        result_matrix[:, 1] = result_values[4:8]   # Second column
-        result_matrix[:, 2] = result_values[8:12]  # Third column
+        result_matrix[:, 0] = result_values[0:4]
+        result_matrix[:, 1] = result_values[4:8]
+        result_matrix[:, 2] = result_values[8:12]
 
         print("Result matrix:")
         print(result_matrix)
 
-        # Verify the result
         if np.allclose(result_matrix, expected):
-            print("Results match expected!")
+            print("✅ Results match expected!")
         else:
-            print("️Results differ from expected")
+            print("❌ Results differ from expected")
 
     else:
-        print(f"Computation failed with status: {status}")
+        print(f"❌ Computation failed with status: {status}")
 
-    # Free memory
-    ggml.context_free(ctx)
+    ggml.context_free(model_ctx)
+    ggml.context_free(compute_ctx)
 
 
 if __name__ == "__main__":

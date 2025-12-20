@@ -54,6 +54,7 @@ PYBIND11_MODULE(ggml, m) {
     m.def("backend_cpu_init", []() { return static_cast<void*>(ggml_backend_cpu_init()); }, "Initialize CPU backend");
     m.def("backend_is_cpu", [](void* backend) { return ggml_backend_is_cpu(static_cast<ggml_backend_t>(backend)); }, "Check if backend is CPU backend", py::arg("backend"));
     m.def("tensor_overhead", &ggml_tensor_overhead, "Get the memory overhead of a tensor");
+    m.def("graph_overhead", &ggml_graph_overhead, "Get the memory overhead of a graph");
     m.def("context_init", [](size_t mem_size, void* mem_buffer = nullptr, bool no_alloc = false) {
         ggml_init_params params = {mem_size, mem_buffer, no_alloc};
         return static_cast<void*>(ggml_init(params));
