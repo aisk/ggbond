@@ -1,6 +1,8 @@
-# ggbond
+# GGBond
 
-Simple and naive GGML Python binding via pybind11.
+![logo](https://www.totallicensing.com/wp-content/uploads/2023/07/Winsing-to-use-1280x640.jpg)
+
+Simple and naive GGML Python binding via pybind11. Working in progress.
 
 ## Installation
 
