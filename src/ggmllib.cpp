@@ -54,8 +54,10 @@ PYBIND11_MODULE(ggml, m) {
     m.def("log_set_default", []() {  }, "");
     m.def("backend_cpu_init", []() { return static_cast<void*>(ggml_backend_cpu_init()); }, "Initialize CPU backend");
     m.def("backend_is_cpu", [](void* backend) { return ggml_backend_is_cpu(static_cast<ggml_backend_t>(backend)); }, "Check if backend is CPU backend", py::arg("backend"));
+    m.def("backend_cpu_set_n_threads", [](void* backend, int n_threads) { ggml_backend_cpu_set_n_threads(static_cast<ggml_backend_t>(backend), n_threads); }, "Set number of threads for CPU backend", py::arg("backend"), py::arg("n_threads"));
     m.def("tensor_overhead", &ggml_tensor_overhead, "Get the memory overhead of a tensor");
     m.def("graph_overhead", &ggml_graph_overhead, "Get the memory overhead of a graph");
+    m.def("DEFAULT_GRAPH_SIZE", []() { return GGML_DEFAULT_GRAPH_SIZE; }, "Default graph size constant");
     m.def("context_init", [](size_t mem_size, void* mem_buffer = nullptr, bool no_alloc = false) {
         ggml_init_params params = {mem_size, mem_buffer, no_alloc};
         return static_cast<void*>(ggml_init(params));
@@ -76,6 +78,9 @@ PYBIND11_MODULE(ggml, m) {
             static_cast<ggml_backend_t>(backend)
         ));
     }, "Allocate all tensors in a GGML context to a backend", py::arg("ctx"), py::arg("backend"));
+    m.def("backend_buffer_free", [](void* buffer) {
+        ggml_backend_buffer_free(static_cast<ggml_backend_buffer_t>(buffer));
+    }, "Free backend buffer", py::arg("buffer"));
     m.def("backend_tensor_set", [](void* tensor, py::buffer data, size_t offset, size_t size) {
         py::buffer_info info = data.request();
         size_t data_size = info.itemsize * info.size;
@@ -130,4 +135,96 @@ PYBIND11_MODULE(ggml, m) {
     m.def("time_init", []() {
         ggml_time_init();
     }, "Initialize time measurement - call this once at the beginning of the program");
+
+    // Graph allocator functions
+    m.def("gallocr_new", [](void* buffer_type) {
+        return static_cast<void*>(ggml_gallocr_new(static_cast<ggml_backend_buffer_type_t>(buffer_type)));
+    }, "Create new graph allocator", py::arg("buffer_type"));
+
+    m.def("gallocr_reserve", [](void* allocr, void* cgraph) {
+        return ggml_gallocr_reserve(
+            static_cast<ggml_gallocr_t>(allocr),
+            static_cast<ggml_cgraph*>(cgraph)
+        );
+    }, " reserve memory for graph computation", py::arg("allocr"), py::arg("cgraph"));
+
+    m.def("gallocr_alloc_graph", [](void* allocr, void* cgraph) {
+        return ggml_gallocr_alloc_graph(
+            static_cast<ggml_gallocr_t>(allocr),
+            static_cast<ggml_cgraph*>(cgraph)
+        );
+    }, "Allocate tensors for graph computation", py::arg("allocr"), py::arg("cgraph"));
+
+    m.def("gallocr_get_buffer_size", [](void* allocr, int buffer_index) {
+        return ggml_gallocr_get_buffer_size(
+            static_cast<ggml_gallocr_t>(allocr),
+            buffer_index
+        );
+    }, "Get buffer size for allocated graph", py::arg("allocr"), py::arg("buffer_index") = 0);
+
+    m.def("gallocr_free", [](void* allocr) {
+        ggml_gallocr_free(static_cast<ggml_gallocr_t>(allocr));
+    }, "Free graph allocator", py::arg("allocr"));
+
+    // Backend buffer type
+    m.def("backend_get_default_buffer_type", [](void* backend) {
+        return static_cast<void*>(ggml_backend_get_default_buffer_type(static_cast<ggml_backend_t>(backend)));
+    }, "Get default buffer type for backend", py::arg("backend"));
+
+    // Graph node access
+    m.def("graph_node", [](void* cgraph, int i) {
+        return static_cast<void*>(ggml_graph_node(static_cast<ggml_cgraph*>(cgraph), i));
+    }, "Get node from graph by index", py::arg("cgraph"), py::arg("i"));
+
+    // Backend graph computation
+    m.def("backend_graph_compute", [](void* backend, void* cgraph) {
+        ggml_backend_graph_compute(
+            static_cast<ggml_backend_t>(backend),
+            static_cast<ggml_cgraph*>(cgraph)
+        );
+    }, "Compute graph using backend", py::arg("backend"), py::arg("cgraph"));
+
+    // Backend tensor get
+    m.def("backend_tensor_get", [](void* tensor, py::buffer data, size_t offset, size_t size) {
+        py::buffer_info info = data.request();
+        size_t data_size = info.itemsize * info.size;
+        if (size == 0) {
+            size = data_size;
+        }
+        if (data_size < size) {
+            throw std::runtime_error("Data buffer is too small");
+        }
+        ggml_backend_tensor_get(
+            static_cast<ggml_tensor*>(tensor),
+            static_cast<void*>(info.ptr),
+            offset,
+            size
+        );
+    }, "Get tensor data to Python buffer", py::arg("tensor"), py::arg("data"), py::arg("offset") = 0, py::arg("size") = 0);
+
+    // Backend management
+    m.def("backend_free", [](void* backend) {
+        ggml_backend_free(static_cast<ggml_backend_t>(backend));
+    }, "Free backend", py::arg("backend"));
+
+    // Tensor helper functions
+    m.def("tensor_ne", [](void* tensor, int dim) {
+        return static_cast<ggml_tensor*>(tensor)->ne[dim];
+    }, "Get tensor dimension size", py::arg("tensor"), py::arg("dim"));
+
+    m.def("tensor_nb", [](void* tensor, int dim) {
+        return static_cast<ggml_tensor*>(tensor)->nb[dim];
+    }, "Get tensor stride in bytes", py::arg("tensor"), py::arg("dim"));
+
+    m.def("tensor_type", [](void* tensor) {
+        return static_cast<ggml_type>(static_cast<ggml_tensor*>(tensor)->type);
+    }, "Get tensor type", py::arg("tensor"));
+
+    m.def("nbytes", [](void* tensor) {
+        return ggml_nbytes(static_cast<ggml_tensor*>(tensor));
+    }, "Get tensor size in bytes", py::arg("tensor"));
+
+    m.def("nelements", [](void* tensor) {
+        return ggml_nelements(static_cast<ggml_tensor*>(tensor));
+    }, "Get number of elements in tensor", py::arg("tensor"));
 }
