@@ -3,10 +3,10 @@ import numpy as np
 
 # create a static buffer for graph building (similar to C++ version)
 BUF_SIZE = ggml.tensor_overhead() * ggml.DEFAULT_GRAPH_SIZE() + ggml.graph_overhead()
-CTX_GRAPH_BUFFER = ggml.context_init(BUF_SIZE, no_alloc=True)
+ctx_graph_buffer = ggml.context_init(BUF_SIZE, no_alloc=True)
 
 
-def load_model(a, b, rows_A, cols_A, rows_B, cols_B):
+def load_model(a, b):
     """
     initialize the tensors of the model in this case two matrices 2x2
     Returns: (backend, buffer, ctx, tensor_a, tensor_b)
@@ -22,9 +22,13 @@ def load_model(a, b, rows_A, cols_A, rows_B, cols_B):
     # create context
     ctx = ggml.context_init(ggml.tensor_overhead() * num_tensors, no_alloc=True)
 
+    # get matrix dimensions using numpy.shape
+    rows_a, cols_a = a.shape
+    rows_b, cols_b = b.shape
+
     # create tensors
-    tensor_a = ggml.new_tensor_2d(ctx, ggml.Type.F32, cols_A, rows_A)
-    tensor_b = ggml.new_tensor_2d(ctx, ggml.Type.F32, cols_B, rows_B)
+    tensor_a = ggml.new_tensor_2d(ctx, ggml.Type.F32, cols_a, rows_a)
+    tensor_b = ggml.new_tensor_2d(ctx, ggml.Type.F32, cols_b, rows_b)
 
     # create a backend buffer (backend memory) and alloc the tensors from the context
     buffer = ggml.backend_alloc_ctx_tensors(ctx, backend)
@@ -42,10 +46,10 @@ def build_graph(tensor_a, tensor_b):
     Returns: graph
     """
     # use the static context buffer (similar to C++ version)
-    graph = ggml.new_graph(CTX_GRAPH_BUFFER)
+    graph = ggml.new_graph(ctx_graph_buffer)
 
     # result = a*b^T
-    result = ggml.mul_mat(CTX_GRAPH_BUFFER, tensor_a, tensor_b)
+    result = ggml.mul_mat(ctx_graph_buffer, tensor_a, tensor_b)
 
     # build operations nodes
     ggml.build_forward_expand(graph, result)
@@ -80,28 +84,24 @@ def main():
     ggml.time_init()
 
     # initialize data of matrices to perform matrix multiplication
-    rows_A, cols_A = 4, 2
-    matrix_A = np.array([
+    matrix_a = np.array([
         [2, 8],
         [5, 1],
         [4, 2],
         [8, 6]
     ], dtype=np.float32)
 
-    rows_B, cols_B = 3, 2
     # Transpose([
     #    10, 9, 5,
     #    5, 9, 4
     # ]) 2 rows, 3 cols
-    matrix_B = np.array([
+    matrix_b = np.array([
         [10, 5],
         [9, 9],
         [5, 4]
     ], dtype=np.float32)
 
-    backend, buffer, ctx, tensor_a, tensor_b = load_model(
-        matrix_A, matrix_B, rows_A, cols_A, rows_B, cols_B
-    )
+    backend, buffer, ctx, tensor_a, tensor_b = load_model(matrix_a, matrix_b)
 
     # calculate the temporaly memory required to compute
     buffer_type = ggml.backend_get_default_buffer_type(backend)
@@ -112,7 +112,7 @@ def main():
     ggml.gallocr_reserve(allocr, graph)
     mem_size = ggml.gallocr_get_buffer_size(allocr, 0)
 
-    print(f"{__name__}: compute buffer size: {mem_size/1024.0:.4f} KB")
+    print(f"compute buffer size: {mem_size/1024.0:.4f} KB")
 
     # perform computation
     result = compute(backend, allocr, tensor_a, tensor_b)
@@ -124,22 +124,18 @@ def main():
     ggml.backend_tensor_get(result, out_data, 0, ggml.nbytes(result))
 
     # expected result:
-    # [ 60.00 55.00 50.00 110.00
-    #  90.00 54.00 54.00 126.00
-    #  42.00 29.00 28.00 64.00 ]
+    # [[ 60.  55.  50. 110.]
+    #  [ 90.  54.  54. 126.]
+    #  [ 42.  29.  28.  64.]]
 
     result_ne0 = ggml.tensor_ne(result, 0)
     result_ne1 = ggml.tensor_ne(result, 1)
 
-    print(f"mul mat ({result_ne0} x {result_ne1}) (transposed result):")
-    print("[", end="")
-    for j in range(result_ne1):  # rows
-        if j > 0:
-            print("\n", end="")
+    # reshape the flat result array - data is stored in row-major order for this case
+    result_matrix = out_data.reshape(result_ne1, result_ne0)
 
-        for i in range(result_ne0):  # cols
-            print(f" {out_data[j * result_ne0 + i]:.2f}", end="")
-    print(" ]")
+    print(f"mul mat ({result_ne0} x {result_ne1}) (transposed result):")
+    print(result_matrix)
 
     # release backend memory used for computation
     ggml.gallocr_free(allocr)
@@ -152,7 +148,7 @@ def main():
     ggml.backend_free(backend)
 
     # free the static graph buffer
-    ggml.context_free(CTX_GRAPH_BUFFER)
+    ggml.context_free(ctx_graph_buffer)
 
 
 if __name__ == "__main__":
