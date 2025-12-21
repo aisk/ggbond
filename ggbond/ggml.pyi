@@ -1,0 +1,212 @@
+"""
+Type stubs for ggbond.ggml module
+
+This file contains type annotations for the GGML Python bindings implemented in src/ggmllib.cpp
+"""
+
+from __future__ import annotations
+from typing import Optional, Union, Any
+import numpy as np
+
+# Type aliases for opaque pointers
+ContextPtr = Any
+TensorPtr = Any
+GraphPtr = Any
+BackendPtr = Any
+BufferPtr = Any
+AllocatorPtr = Any
+
+class Type:
+    """GGML data type enumeration"""
+    F32: int
+    F16: int
+    Q4_0: int
+    Q4_1: int
+    Q5_0: int
+    Q5_1: int
+    Q8_0: int
+    Q8_1: int
+    Q2_K: int
+    Q3_K: int
+    Q4_K: int
+    Q5_K: int
+    Q6_K: int
+    Q8_K: int
+    IQ2_XXS: int
+    IQ2_XS: int
+    IQ3_XXS: int
+    IQ1_S: int
+    IQ4_NL: int
+    IQ3_S: int
+    IQ2_S: int
+    IQ4_XS: int
+    I8: int
+    I16: int
+    I32: int
+    I64: int
+    F64: int
+    IQ1_M: int
+
+class Status:
+    """GGML status enumeration"""
+    ALLOC_FAILED: int
+    FAILED: int
+    SUCCESS: int
+    ABORTED: int
+
+# Core functions
+def log_set_default() -> None: ...
+
+# Backend management
+def backend_cpu_init() -> BackendPtr:
+    """Initialize CPU backend"""
+    ...
+
+def backend_is_cpu(backend: BackendPtr) -> bool:
+    """Check if backend is CPU backend"""
+    ...
+
+def backend_cpu_set_n_threads(backend: BackendPtr, n_threads: int) -> None:
+    """Set number of threads for CPU backend"""
+    ...
+
+def backend_get_default_buffer_type(backend: BackendPtr) -> BufferPtr:
+    """Get default buffer type for backend"""
+    ...
+
+def backend_alloc_ctx_tensors(ctx: ContextPtr, backend: BackendPtr) -> BufferPtr:
+    """Allocate all tensors in a GGML context to a backend"""
+    ...
+
+def backend_tensor_set(tensor: TensorPtr, data: buffer, offset: int = 0, size: int = 0) -> None:
+    """Set tensor data from Python buffer"""
+    ...
+
+def backend_tensor_get(tensor: TensorPtr, data: buffer, offset: int = 0, size: int = 0) -> None:
+    """Get tensor data to Python buffer"""
+    ...
+
+def backend_graph_compute(backend: BackendPtr, cgraph: GraphPtr) -> None:
+    """Compute graph using backend"""
+    ...
+
+def backend_buffer_free(buffer: BufferPtr) -> None:
+    """Free backend buffer"""
+    ...
+
+def backend_free(backend: BackendPtr) -> None:
+    """Free backend"""
+    ...
+
+# Memory management and context
+def context_init(mem_size: int, mem_buffer: Optional[bytes] = None, no_alloc: bool = False) -> ContextPtr:
+    """Initialize GGML context"""
+    ...
+
+def context_free(ctx: ContextPtr) -> None:
+    """Free GGML context and all its allocated memory"""
+    ...
+
+def tensor_overhead() -> int:
+    """Get the memory overhead of a tensor"""
+    ...
+
+def graph_overhead() -> int:
+    """Get the memory overhead of a graph"""
+    ...
+
+def DEFAULT_GRAPH_SIZE() -> int:
+    """Default graph size constant"""
+    ...
+
+def type_size(type: int) -> int:
+    """Get size in bytes for all elements in a block of the given type"""
+    ...
+
+def blck_size(type: int) -> int:
+    """Get block size (number of elements per block) for the given type"""
+    ...
+
+# Tensor operations
+def new_tensor_2d(ctx: ContextPtr, type: int, ne0: int, ne1: int) -> TensorPtr:
+    """Create a new 2D tensor"""
+    ...
+
+def get_data(tensor: TensorPtr) -> int:
+    """Get data pointer from tensor (as uintptr_t)"""
+    ...
+
+def get_data_f32(tensor: TensorPtr) -> int:
+    """Get float32 data pointer from tensor (as uintptr_t)"""
+    ...
+
+def tensor_ne(tensor: TensorPtr, dim: int) -> int:
+    """Get tensor dimension size"""
+    ...
+
+def tensor_nb(tensor: TensorPtr, dim: int) -> int:
+    """Get tensor stride in bytes"""
+    ...
+
+def tensor_type(tensor: TensorPtr) -> int:
+    """Get tensor type"""
+    ...
+
+def nbytes(tensor: TensorPtr) -> int:
+    """Get tensor size in bytes"""
+    ...
+
+def nelements(tensor: TensorPtr) -> int:
+    """Get number of elements in tensor"""
+    ...
+
+# Computation graph
+def new_graph(ctx: ContextPtr) -> GraphPtr:
+    """Create a new computation graph"""
+    ...
+
+def new_graph_custom(ctx: ContextPtr, size: int, grads: bool) -> GraphPtr:
+    """Create a new computation graph with custom size and gradient settings"""
+    ...
+
+def mul_mat(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+    """Matrix multiplication: result = a * b^T"""
+    ...
+
+def build_forward_expand(cgraph: GraphPtr, tensor: TensorPtr) -> None:
+    """Build forward computation graph from tensor"""
+    ...
+
+def graph_compute_with_ctx(ctx: ContextPtr, cgraph: GraphPtr, n_threads: int = 1) -> int:
+    """Compute the graph with given context and thread count"""
+    ...
+
+def graph_node(cgraph: GraphPtr, i: int) -> TensorPtr:
+    """Get node from graph by index"""
+    ...
+
+# Graph allocator
+def gallocr_new(buffer_type: BufferPtr) -> AllocatorPtr:
+    """Create new graph allocator"""
+    ...
+
+def gallocr_reserve(allocr: AllocatorPtr, cgraph: GraphPtr) -> bool:
+    """Reserve memory for graph computation"""
+    ...
+
+def gallocr_alloc_graph(allocr: AllocatorPtr, cgraph: GraphPtr) -> bool:
+    """Allocate tensors for graph computation"""
+    ...
+
+def gallocr_get_buffer_size(allocr: AllocatorPtr, buffer_index: int = 0) -> int:
+    """Get buffer size for allocated graph"""
+    ...
+
+def gallocr_free(allocr: AllocatorPtr) -> None:
+    """Free graph allocator"""
+    ...
+
+# Time utilities
+def time_init() -> None:
+    """Initialize time measurement - call this once at the beginning of the program"""
+    ...
