@@ -173,6 +173,40 @@ def mul_mat(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
     """Matrix multiplication: result = a * b^T"""
     ...
 
+# Binary operations
+def add(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+    """Element-wise addition: result = a + b"""
+    ...
+
+def sub(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+    """Element-wise subtraction: result = a - b"""
+    ...
+
+def mul(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+    """Element-wise multiplication: result = a * b"""
+    ...
+
+def div(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+    """Element-wise division: result = a / b"""
+    ...
+
+# Unary operations
+def abs(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise absolute value: result = |a|"""
+    ...
+
+def neg(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise negation: result = -a"""
+    ...
+
+def sqrt(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise square root: result = sqrt(a)"""
+    ...
+
+def sqr(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise square: result = a^2"""
+    ...
+
 def build_forward_expand(cgraph: GraphPtr, tensor: TensorPtr) -> None:
     """Build forward computation graph from tensor"""
     ...
