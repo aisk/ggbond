@@ -110,6 +110,68 @@ PYBIND11_MODULE(ggml, m) {
             static_cast<ggml_tensor*>(b)
         ));
     }, "Matrix multiplication: result = a * b", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    // Binary operations
+    m.def("add", [](void* ctx, void* a, void* b) {
+        return static_cast<void*>(ggml_add(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a),
+            static_cast<ggml_tensor*>(b)
+        ));
+    }, "Element-wise addition: result = a + b", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("sub", [](void* ctx, void* a, void* b) {
+        return static_cast<void*>(ggml_sub(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a),
+            static_cast<ggml_tensor*>(b)
+        ));
+    }, "Element-wise subtraction: result = a - b", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("mul", [](void* ctx, void* a, void* b) {
+        return static_cast<void*>(ggml_mul(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a),
+            static_cast<ggml_tensor*>(b)
+        ));
+    }, "Element-wise multiplication: result = a * b", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("div", [](void* ctx, void* a, void* b) {
+        return static_cast<void*>(ggml_div(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a),
+            static_cast<ggml_tensor*>(b)
+        ));
+    }, "Element-wise division: result = a / b", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    // Unary operations
+    m.def("abs", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_abs(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise absolute value: result = |a|", py::arg("ctx"), py::arg("a"));
+
+    m.def("neg", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_neg(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise negation: result = -a", py::arg("ctx"), py::arg("a"));
+
+    m.def("sqrt", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_sqrt(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise square root: result = sqrt(a)", py::arg("ctx"), py::arg("a"));
+
+    m.def("sqr", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_sqr(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise square: result = a^2", py::arg("ctx"), py::arg("a"));
     m.def("build_forward_expand", [](void* cgraph, void* tensor) {
         ggml_build_forward_expand(
             static_cast<ggml_cgraph*>(cgraph),
