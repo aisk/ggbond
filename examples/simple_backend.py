@@ -1,89 +1,25 @@
-from ggbond import ggml
 import numpy as np
 
-# create a static buffer for graph building (similar to C++ version)
-BUF_SIZE = ggml.tensor_overhead() * ggml.DEFAULT_GRAPH_SIZE() + ggml.graph_overhead()
-ctx_graph_buffer = ggml.context_init(BUF_SIZE, no_alloc=True)
-
-
-def load_model(a, b):
-    """
-    initialize the tensors of the model in this case two matrices 2x2
-    Returns: (backend, buffer, ctx, tensor_a, tensor_b)
-    """
-    # initialize the backend
-    # if there aren't GPU Backends fallback to CPU backend
-    backend = ggml.backend_cpu_init()
-    if not backend:
-        raise RuntimeError("Failed to initialize CPU backend")
-
-    num_tensors = 2
-
-    # create context
-    ctx = ggml.context_init(ggml.tensor_overhead() * num_tensors, no_alloc=True)
-
-    # get matrix dimensions using numpy.shape
-    rows_a, cols_a = a.shape
-    rows_b, cols_b = b.shape
-
-    # create tensors
-    tensor_a = ggml.new_tensor_2d(ctx, ggml.Type.F32, cols_a, rows_a)
-    tensor_b = ggml.new_tensor_2d(ctx, ggml.Type.F32, cols_b, rows_b)
-
-    # create a backend buffer (backend memory) and alloc the tensors from the context
-    buffer = ggml.backend_alloc_ctx_tensors(ctx, backend)
-
-    # load data from cpu memory to backend buffer
-    ggml.backend_tensor_set(tensor_a, a.flatten(), 0, ggml.nbytes(tensor_a))
-    ggml.backend_tensor_set(tensor_b, b.flatten(), 0, ggml.nbytes(tensor_b))
-
-    return backend, buffer, ctx, tensor_a, tensor_b
-
-
-def build_graph(tensor_a, tensor_b):
-    """
-    build the compute graph to perform a matrix multiplication
-    Returns: graph
-    """
-    # use the static context buffer (similar to C++ version)
-    graph = ggml.new_graph(ctx_graph_buffer)
-
-    # result = a*b^T
-    result = ggml.mul_mat(ctx_graph_buffer, tensor_a, tensor_b)
-
-    # build operations nodes
-    ggml.build_forward_expand(graph, result)
-
-    return graph
-
-
-def compute(backend, allocr, tensor_a, tensor_b):
-    """
-    compute with backend
-    Returns: result tensor
-    """
-    # reset the allocator to free all the memory allocated during the previous inference
-    graph = build_graph(tensor_a, tensor_b)
-
-    # allocate tensors
-    ggml.gallocr_alloc_graph(allocr, graph)
-
-    n_threads = 1  # number of threads to perform some operations with multi-threading
-
-    if ggml.backend_is_cpu(backend):
-        ggml.backend_cpu_set_n_threads(backend, n_threads)
-
-    ggml.backend_graph_compute(backend, graph)
-
-    # in this case, the output tensor is the last one in the graph
-    result = ggml.graph_node(graph, -1)
-    return result
+from ggbond import ggml
 
 
 def main():
     ggml.time_init()
+    ggml.log_set_default()
 
-    # initialize data of matrices to perform matrix multiplication
+    # =========================================================================
+    # Phase 1: Preparation - Define metadata and build graph
+    # =========================================================================
+
+    # 1.1 Initialize context for tensor metadata (no actual memory allocation)
+    num_tensors = 2
+    ctx_model = ggml.context_init(ggml.tensor_overhead() * num_tensors, no_alloc=True)
+
+    # 1.2 Initialize context for graph building
+    BUF_SIZE = ggml.tensor_overhead() * ggml.DEFAULT_GRAPH_SIZE() + ggml.graph_overhead()
+    ctx_graph = ggml.context_init(BUF_SIZE, no_alloc=True)
+
+    # 1.3 Define tensor metadata in ctx (shape, type, etc.)
     matrix_a = np.array([
         [2, 8],
         [5, 1],
@@ -91,64 +27,82 @@ def main():
         [8, 6]
     ], dtype=np.float32)
 
-    # Transpose([
-    #    10, 9, 5,
-    #    5, 9, 4
-    # ]) 2 rows, 3 cols
     matrix_b = np.array([
         [10, 5],
         [9, 9],
         [5, 4]
     ], dtype=np.float32)
 
-    backend, buffer, ctx, tensor_a, tensor_b = load_model(matrix_a, matrix_b)
+    rows_a, cols_a = matrix_a.shape
+    rows_b, cols_b = matrix_b.shape
 
-    # calculate the temporaly memory required to compute
+    tensor_a = ggml.new_tensor_2d(ctx_model, ggml.Type.F32, cols_a, rows_a)
+    tensor_b = ggml.new_tensor_2d(ctx_model, ggml.Type.F32, cols_b, rows_b)
+
+    # 1.4 Build computation graph
+    graph = ggml.new_graph(ctx_graph)
+    result = ggml.mul_mat(ctx_graph, tensor_a, tensor_b)
+    ggml.build_forward_expand(graph, result)
+
+    # =========================================================================
+    # Phase 2: Memory Allocation - Allocate actual memory on backend
+    # =========================================================================
+
+    # 2.1 Initialize backend (CPU in this case)
+    backend = ggml.backend_cpu_init()
+
+    # 2.2 Allocate actual memory for tensors in ctx_model on the backend
+    buffer = ggml.backend_alloc_ctx_tensors(ctx_model, backend)
+
+    # 2.3 Create allocator for computation graph and reserve memory
     buffer_type = ggml.backend_get_default_buffer_type(backend)
     allocr = ggml.gallocr_new(buffer_type)
-
-    # create the worst case graph for memory usage estimation
-    graph = build_graph(tensor_a, tensor_b)
     ggml.gallocr_reserve(allocr, graph)
-    mem_size = ggml.gallocr_get_buffer_size(allocr, 0)
 
+    mem_size = ggml.gallocr_get_buffer_size(allocr, 0)
     print(f"compute buffer size: {mem_size/1024.0:.4f} KB")
 
-    # perform computation
-    result = compute(backend, allocr, tensor_a, tensor_b)
+    # =========================================================================
+    # Phase 3: Data Transfer and Execution
+    # =========================================================================
 
-    # create a array to print result
-    out_data = np.empty(ggml.nelements(result), dtype=np.float32)
+    # 3.1 Transfer data from CPU memory to backend buffer
+    ggml.backend_tensor_set(tensor_a, matrix_a.flatten(), 0, ggml.nbytes(tensor_a))
+    ggml.backend_tensor_set(tensor_b, matrix_b.flatten(), 0, ggml.nbytes(tensor_b))
 
-    # bring the data from the backend memory
-    ggml.backend_tensor_get(result, out_data, 0, ggml.nbytes(result))
+    # 3.2 Allocate graph computation memory
+    ggml.gallocr_alloc_graph(allocr, graph)
 
-    # expected result:
-    # [[ 60.  55.  50. 110.]
-    #  [ 90.  54.  54. 126.]
-    #  [ 42.  29.  28.  64.]]
+    # 3.3 Configure and execute computation
+    ggml.backend_cpu_set_n_threads(backend, 4)
 
-    result_ne0 = ggml.tensor_ne(result, 0)
-    result_ne1 = ggml.tensor_ne(result, 1)
+    ggml.backend_graph_compute(backend, graph)
 
-    # reshape the flat result array - data is stored in row-major order for this case
+    # 3.4 Get result from backend memory
+    result_tensor = ggml.graph_node(graph, -1)
+    out_data = np.empty(ggml.nelements(result_tensor), dtype=np.float32)
+    ggml.backend_tensor_get(result_tensor, out_data, 0, ggml.nbytes(result_tensor))
+
+    # =========================================================================
+    # Display Result
+    # =========================================================================
+
+    result_ne0 = ggml.tensor_ne(result_tensor, 0)
+    result_ne1 = ggml.tensor_ne(result_tensor, 1)
     result_matrix = out_data.reshape(result_ne1, result_ne0)
 
     print(f"mul mat ({result_ne0} x {result_ne1}) (transposed result):")
     print(result_matrix)
 
-    # release backend memory used for computation
+    # =========================================================================
+    # Cleanup - Release all resources
+    # =========================================================================
+
     ggml.gallocr_free(allocr)
-
-    # free memory
-    ggml.context_free(ctx)
-
-    # release backend memory and free backend
+    ggml.context_free(ctx_model)
     ggml.backend_buffer_free(buffer)
     ggml.backend_free(backend)
-
-    # free the static graph buffer
-    ggml.context_free(ctx_graph_buffer)
+    ggml.context_free(ctx_graph)
 
 
 if __name__ == "__main__":
