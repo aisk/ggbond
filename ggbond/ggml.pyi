@@ -207,6 +207,22 @@ def div(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
     """Element-wise division: result = a / b"""
     ...
 
+def add1(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+    """Add scalar b to each row of matrix a"""
+    ...
+
+def out_prod(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+    """Outer product: result = a @ b^T"""
+    ...
+
+def concat(ctx: ContextPtr, a: TensorPtr, b: TensorPtr, dim: int) -> TensorPtr:
+    """Concatenate tensors a and b along dimension dim"""
+    ...
+
+def count_equal(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+    """Count number of equal elements in a and b"""
+    ...
+
 # Unary operations
 def abs(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
     """Element-wise absolute value: result = |a|"""
@@ -222,6 +238,39 @@ def sqrt(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
 
 def sqr(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
     """Element-wise square: result = a^2"""
+    ...
+
+def log(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise natural logarithm: result = log(a)"""
+    ...
+
+def exp(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise exponential: result = exp(a)"""
+    ...
+
+def tanh(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise hyperbolic tangent: result = tanh(a)"""
+    ...
+
+def sigmoid(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise sigmoid activation: result = 1 / (1 + exp(-a))"""
+    ...
+
+def relu(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise ReLU activation: result = max(0, a)"""
+    ...
+
+def gelu(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Element-wise GELU activation (Gaussian Error Linear Unit)"""
+    ...
+
+# Reduction operations
+def sum(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Sum all elements in tensor, returns scalar"""
+    ...
+
+def mean(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+    """Mean of all elements along rows"""
     ...
 
 def build_forward_expand(cgraph: GraphPtr, tensor: TensorPtr) -> None:

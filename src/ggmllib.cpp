@@ -151,6 +151,40 @@ PYBIND11_MODULE(ggml, m) {
         ));
     }, "Element-wise division: result = a / b", py::arg("ctx"), py::arg("a"), py::arg("b"));
 
+    // Additional binary operations
+    m.def("add1", [](void* ctx, void* a, void* b) {
+        return static_cast<void*>(ggml_add1(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a),
+            static_cast<ggml_tensor*>(b)
+        ));
+    }, "Add scalar b to each row of matrix a", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("out_prod", [](void* ctx, void* a, void* b) {
+        return static_cast<void*>(ggml_out_prod(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a),
+            static_cast<ggml_tensor*>(b)
+        ));
+    }, "Outer product: result = a @ b^T", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("concat", [](void* ctx, void* a, void* b, int dim) {
+        return static_cast<void*>(ggml_concat(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a),
+            static_cast<ggml_tensor*>(b),
+            dim
+        ));
+    }, "Concatenate tensors a and b along dimension dim", py::arg("ctx"), py::arg("a"), py::arg("b"), py::arg("dim"));
+
+    m.def("count_equal", [](void* ctx, void* a, void* b) {
+        return static_cast<void*>(ggml_count_equal(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a),
+            static_cast<ggml_tensor*>(b)
+        ));
+    }, "Count number of equal elements in a and b", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
     // Unary operations
     m.def("abs", [](void* ctx, void* a) {
         return static_cast<void*>(ggml_abs(
@@ -179,6 +213,64 @@ PYBIND11_MODULE(ggml, m) {
             static_cast<ggml_tensor*>(a)
         ));
     }, "Element-wise square: result = a^2", py::arg("ctx"), py::arg("a"));
+
+    // Additional unary operations
+    m.def("log", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_log(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise natural logarithm: result = log(a)", py::arg("ctx"), py::arg("a"));
+
+    m.def("exp", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_exp(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise exponential: result = exp(a)", py::arg("ctx"), py::arg("a"));
+
+    m.def("tanh", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_tanh(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise hyperbolic tangent: result = tanh(a)", py::arg("ctx"), py::arg("a"));
+
+    m.def("sigmoid", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_sigmoid(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise sigmoid activation: result = 1 / (1 + exp(-a))", py::arg("ctx"), py::arg("a"));
+
+    m.def("relu", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_relu(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise ReLU activation: result = max(0, a)", py::arg("ctx"), py::arg("a"));
+
+    m.def("gelu", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_gelu(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Element-wise GELU activation (Gaussian Error Linear Unit)", py::arg("ctx"), py::arg("a"));
+
+    // Reduction operations
+    m.def("sum", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_sum(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Sum all elements in tensor, returns scalar", py::arg("ctx"), py::arg("a"));
+
+    m.def("mean", [](void* ctx, void* a) {
+        return static_cast<void*>(ggml_mean(
+            static_cast<ggml_context*>(ctx),
+            static_cast<ggml_tensor*>(a)
+        ));
+    }, "Mean of all elements along rows", py::arg("ctx"), py::arg("a"));
     m.def("build_forward_expand", [](void* cgraph, void* tensor) {
         ggml_build_forward_expand(
             static_cast<ggml_cgraph*>(cgraph),
