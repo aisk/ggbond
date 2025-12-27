@@ -15,6 +15,10 @@ find_package(Python COMPONENTS Interpreter Development REQUIRED)
 # Find pybind11
 find_package(pybind11 REQUIRED)
 
+# Set runtime output directory to writable build directory
+# This avoids "Read-only file system" errors with GGML Metal backend during editable installs
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin CACHE PATH "Runtime output directory" FORCE)
+
 # Add GGML as vendor library
 add_subdirectory(vendor/ggml)
 
