@@ -1,9 +1,28 @@
+import getopt
 import numpy as np
+import sys
 
 from ggbond import ggml
 
 
 def main():
+    # Parse command line arguments
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "b:", ["backend="])
+    except getopt.GetoptError as err:
+        print(f"Error: {err}")
+        print("Usage: python simple_backend.py [-b|--backend cpu|metal]")
+        sys.exit(1)
+
+    backend_type = "cpu"  # default
+    for opt, arg in opts:
+        if opt in ("-b", "--backend"):
+            backend_type = arg.lower()
+
+    if backend_type not in ("cpu", "metal"):
+        print(f"Error: invalid backend '{backend_type}'. Use 'cpu' or 'metal'")
+        sys.exit(1)
+
     ggml.time_init()
     ggml.log_set_default()
 
@@ -48,8 +67,13 @@ def main():
     # Phase 2: Memory Allocation - Allocate actual memory on backend
     # =========================================================================
 
-    # 2.1 Initialize backend (CPU in this case)
-    backend = ggml.backend_cpu_init()
+    # 2.1 Initialize backend (CPU or Metal based on command line argument)
+    if backend_type == "metal":
+        backend = ggml.backend_metal_init()
+        print(f"Using Metal backend: {ggml.backend_is_metal(backend)}")
+    else:
+        backend = ggml.backend_cpu_init()
+        print(f"Using CPU backend: {ggml.backend_is_cpu(backend)}")
 
     # 2.2 Allocate actual memory for tensors in ctx_model on the backend
     buffer = ggml.backend_alloc_ctx_tensors(ctx_model, backend)
@@ -74,7 +98,8 @@ def main():
     ggml.gallocr_alloc_graph(allocr, graph)
 
     # 3.3 Configure and execute computation
-    ggml.backend_cpu_set_n_threads(backend, 4)
+    if backend_type == "cpu":
+        ggml.backend_cpu_set_n_threads(backend, 4)
 
     ggml.backend_graph_compute(backend, graph)
 

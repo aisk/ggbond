@@ -70,6 +70,23 @@ def backend_cpu_set_n_threads(backend: BackendPtr, n_threads: int) -> None:
     """Set number of threads for CPU backend"""
     ...
 
+# Metal backend functions (macOS only)
+def backend_metal_init() -> BackendPtr:
+    """Initialize Metal backend (macOS only)"""
+    ...
+
+def backend_is_metal(backend: BackendPtr) -> bool:
+    """Check if backend is Metal backend"""
+    ...
+
+def backend_metal_supports_family(backend: BackendPtr, family: int) -> bool:
+    """Check if Metal device supports specific feature family"""
+    ...
+
+def backend_metal_capture_next_compute(backend: BackendPtr) -> None:
+    """Capture next Metal compute for debugging"""
+    ...
+
 def backend_get_default_buffer_type(backend: BackendPtr) -> BufferPtr:
     """Get default buffer type for backend"""
     ...
