@@ -189,6 +189,14 @@ def nelements(tensor: TensorPtr) -> int:
     """Get number of elements in tensor"""
     ...
 
+def set_input(tensor: TensorPtr) -> None:
+    """Mark tensor as graph input (allocated at graph start in non-overlapping addresses)"""
+    ...
+
+def set_output(tensor: TensorPtr) -> None:
+    """Mark tensor as graph output (never freed or overwritten during computation)"""
+    ...
+
 # Computation graph
 def new_graph(ctx: ContextPtr) -> GraphPtr:
     """Create a new computation graph"""
