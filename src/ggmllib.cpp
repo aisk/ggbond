@@ -414,4 +414,13 @@ PYBIND11_MODULE(ggml, m) {
     m.def("nelements", [](void* tensor) {
         return ggml_nelements(static_cast<ggml_tensor*>(tensor));
     }, "Get number of elements in tensor", py::arg("tensor"));
+
+    // Graph input/output marking
+    m.def("set_input", [](void* tensor) {
+        ggml_set_input(static_cast<ggml_tensor*>(tensor));
+    }, "Mark tensor as graph input (allocated at graph start in non-overlapping addresses)", py::arg("tensor"));
+
+    m.def("set_output", [](void* tensor) {
+        ggml_set_output(static_cast<ggml_tensor*>(tensor));
+    }, "Mark tensor as graph output (never freed or overwritten during computation)", py::arg("tensor"));
 }
