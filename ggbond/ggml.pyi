@@ -145,8 +145,20 @@ def blck_size(type: int) -> int:
     ...
 
 # Tensor operations
+def new_tensor_1d(ctx: ContextPtr, type: int, ne0: int) -> TensorPtr:
+    """Create a new 1D tensor"""
+    ...
+
 def new_tensor_2d(ctx: ContextPtr, type: int, ne0: int, ne1: int) -> TensorPtr:
     """Create a new 2D tensor"""
+    ...
+
+def new_tensor_3d(ctx: ContextPtr, type: int, ne0: int, ne1: int, ne2: int) -> TensorPtr:
+    """Create a new 3D tensor"""
+    ...
+
+def new_tensor_4d(ctx: ContextPtr, type: int, ne0: int, ne1: int, ne2: int, ne3: int) -> TensorPtr:
+    """Create a new 4D tensor"""
     ...
 
 def get_data(tensor: TensorPtr) -> int:

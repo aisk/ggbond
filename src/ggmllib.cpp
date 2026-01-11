@@ -69,6 +69,13 @@ PYBIND11_MODULE(ggml, m) {
         ggml_init_params params = {mem_size, mem_buffer, no_alloc};
         return static_cast<void*>(ggml_init(params));
     }, "Initialize GGML context", py::arg("mem_size"), py::arg("mem_buffer") = nullptr, py::arg("no_alloc") = false);
+    m.def("new_tensor_1d", [](void* ctx, ggml_type type, int64_t ne0) {
+        return static_cast<void*>(ggml_new_tensor_1d(
+            static_cast<ggml_context*>(ctx),
+            type,
+            ne0
+        ));
+    }, "Create a new 1D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"));
     m.def("new_tensor_2d", [](void* ctx, ggml_type type, int64_t ne0, int64_t ne1) {
         return static_cast<void*>(ggml_new_tensor_2d(
             static_cast<ggml_context*>(ctx),
@@ -77,6 +84,25 @@ PYBIND11_MODULE(ggml, m) {
             ne1
         ));
     }, "Create a new 2D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"), py::arg("ne1"));
+    m.def("new_tensor_3d", [](void* ctx, ggml_type type, int64_t ne0, int64_t ne1, int64_t ne2) {
+        return static_cast<void*>(ggml_new_tensor_3d(
+            static_cast<ggml_context*>(ctx),
+            type,
+            ne0,
+            ne1,
+            ne2
+        ));
+    }, "Create a new 3D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"));
+    m.def("new_tensor_4d", [](void* ctx, ggml_type type, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
+        return static_cast<void*>(ggml_new_tensor_4d(
+            static_cast<ggml_context*>(ctx),
+            type,
+            ne0,
+            ne1,
+            ne2,
+            ne3
+        ));
+    }, "Create a new 4D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"));
     m.def("type_size", &ggml_type_size, "Get size in bytes for all elements in a block of the given type", py::arg("type"));
     m.def("blck_size", &ggml_blck_size, "Get block size (number of elements per block) for the given type", py::arg("type"));
     m.def("backend_alloc_ctx_tensors", [](void* ctx, void* backend) {
