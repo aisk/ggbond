@@ -5,7 +5,9 @@
 #include <ggml-cpu.h>
 #include <ggml-backend.h>
 #include <ggml-alloc.h>
+#ifdef __APPLE__
 #include <ggml-metal.h>
+#endif
 
 namespace py = pybind11;
 
@@ -57,11 +59,13 @@ PYBIND11_MODULE(ggml, m) {
     m.def("backend_is_cpu", [](void* backend) { return ggml_backend_is_cpu(static_cast<ggml_backend_t>(backend)); }, "Check if backend is CPU backend", py::arg("backend"));
     m.def("backend_cpu_set_n_threads", [](void* backend, int n_threads) { ggml_backend_cpu_set_n_threads(static_cast<ggml_backend_t>(backend), n_threads); }, "Set number of threads for CPU backend", py::arg("backend"), py::arg("n_threads"));
 
+#ifdef __APPLE__
     // Metal backend functions (macOS only)
     m.def("backend_metal_init", []() { return static_cast<void*>(ggml_backend_metal_init()); }, "Initialize Metal backend (macOS only)");
     m.def("backend_is_metal", [](void* backend) { return ggml_backend_is_metal(static_cast<ggml_backend_t>(backend)); }, "Check if backend is Metal backend", py::arg("backend"));
     m.def("backend_metal_supports_family", [](void* backend, int family) { return ggml_backend_metal_supports_family(static_cast<ggml_backend_t>(backend), family); }, "Check if Metal device supports specific feature family", py::arg("backend"), py::arg("family"));
     m.def("backend_metal_capture_next_compute", [](void* backend) { ggml_backend_metal_capture_next_compute(static_cast<ggml_backend_t>(backend)); }, "Capture next Metal compute for debugging", py::arg("backend"));
+#endif
     m.def("tensor_overhead", &ggml_tensor_overhead, "Get the memory overhead of a tensor");
     m.def("graph_overhead", &ggml_graph_overhead, "Get the memory overhead of a graph");
     m.def("DEFAULT_GRAPH_SIZE", []() { return GGML_DEFAULT_GRAPH_SIZE; }, "Default graph size constant");
