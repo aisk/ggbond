@@ -1,6 +1,7 @@
 import getopt
 import numpy as np
 import sys
+import platform
 
 from ggbond import ggml
 
@@ -21,6 +22,12 @@ def main():
 
     if backend_type not in ("cpu", "metal"):
         print(f"Error: invalid backend '{backend_type}'. Use 'cpu' or 'metal'")
+        sys.exit(1)
+
+    # Check if Metal backend is available on this platform
+    if backend_type == "metal" and platform.system() != "Darwin":
+        print(f"Error: Metal backend is only available on macOS. Current platform: {platform.system()}")
+        print("Please use 'cpu' backend instead.")
         sys.exit(1)
 
     ggml.time_init()
