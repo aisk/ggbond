@@ -5,16 +5,44 @@ This file contains type annotations for the GGML Python bindings implemented in 
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any
+from typing import Optional, Union
 import numpy as np
 
-# Type aliases for opaque pointers
-ContextPtr = Any
-TensorPtr = Any
-GraphPtr = Any
-BackendPtr = Any
-BufferPtr = Any
-AllocatorPtr = Any
+# Opaque pointer types
+class Context:
+    """Opaque pointer to ggml_context"""
+    def __repr__(self) -> str: ...
+    def __bool__(self) -> bool: ...
+
+class Tensor:
+    """Opaque pointer to ggml_tensor"""
+    def __repr__(self) -> str: ...
+    def __bool__(self) -> bool: ...
+
+class Graph:
+    """Opaque pointer to ggml_cgraph"""
+    def __repr__(self) -> str: ...
+    def __bool__(self) -> bool: ...
+
+class Backend:
+    """Opaque pointer to ggml_backend"""
+    def __repr__(self) -> str: ...
+    def __bool__(self) -> bool: ...
+
+class Buffer:
+    """Opaque pointer to ggml_backend_buffer"""
+    def __repr__(self) -> str: ...
+    def __bool__(self) -> bool: ...
+
+class BufferType:
+    """Opaque pointer to ggml_backend_buffer_type"""
+    def __repr__(self) -> str: ...
+    def __bool__(self) -> bool: ...
+
+class GAllocr:
+    """Opaque pointer to ggml_gallocr"""
+    def __repr__(self) -> str: ...
+    def __bool__(self) -> bool: ...
 
 class Type:
     """GGML data type enumeration"""
@@ -58,69 +86,69 @@ class Status:
 def log_set_default() -> None: ...
 
 # Backend management
-def backend_cpu_init() -> BackendPtr:
+def backend_cpu_init() -> Backend:
     """Initialize CPU backend"""
     ...
 
-def backend_is_cpu(backend: BackendPtr) -> bool:
+def backend_is_cpu(backend: Backend) -> bool:
     """Check if backend is CPU backend"""
     ...
 
-def backend_cpu_set_n_threads(backend: BackendPtr, n_threads: int) -> None:
+def backend_cpu_set_n_threads(backend: Backend, n_threads: int) -> None:
     """Set number of threads for CPU backend"""
     ...
 
 # Metal backend functions (macOS only)
-def backend_metal_init() -> BackendPtr:
+def backend_metal_init() -> Backend:
     """Initialize Metal backend (macOS only)"""
     ...
 
-def backend_is_metal(backend: BackendPtr) -> bool:
+def backend_is_metal(backend: Backend) -> bool:
     """Check if backend is Metal backend"""
     ...
 
-def backend_metal_supports_family(backend: BackendPtr, family: int) -> bool:
+def backend_metal_supports_family(backend: Backend, family: int) -> bool:
     """Check if Metal device supports specific feature family"""
     ...
 
-def backend_metal_capture_next_compute(backend: BackendPtr) -> None:
+def backend_metal_capture_next_compute(backend: Backend) -> None:
     """Capture next Metal compute for debugging"""
     ...
 
-def backend_get_default_buffer_type(backend: BackendPtr) -> BufferPtr:
+def backend_get_default_buffer_type(backend: Backend) -> BufferType:
     """Get default buffer type for backend"""
     ...
 
-def backend_alloc_ctx_tensors(ctx: ContextPtr, backend: BackendPtr) -> BufferPtr:
+def backend_alloc_ctx_tensors(ctx: Context, backend: Backend) -> Buffer:
     """Allocate all tensors in a GGML context to a backend"""
     ...
 
-def backend_tensor_set(tensor: TensorPtr, data: buffer, offset: int = 0, size: int = 0) -> None:
+def backend_tensor_set(tensor: Tensor, data: buffer, offset: int = 0, size: int = 0) -> None:
     """Set tensor data from Python buffer"""
     ...
 
-def backend_tensor_get(tensor: TensorPtr, data: buffer, offset: int = 0, size: int = 0) -> None:
+def backend_tensor_get(tensor: Tensor, data: buffer, offset: int = 0, size: int = 0) -> None:
     """Get tensor data to Python buffer"""
     ...
 
-def backend_graph_compute(backend: BackendPtr, cgraph: GraphPtr) -> None:
+def backend_graph_compute(backend: Backend, cgraph: Graph) -> None:
     """Compute graph using backend"""
     ...
 
-def backend_buffer_free(buffer: BufferPtr) -> None:
+def backend_buffer_free(buffer: Buffer) -> None:
     """Free backend buffer"""
     ...
 
-def backend_free(backend: BackendPtr) -> None:
+def backend_free(backend: Backend) -> None:
     """Free backend"""
     ...
 
 # Memory management and context
-def context_init(mem_size: int, mem_buffer: Optional[bytes] = None, no_alloc: bool = False) -> ContextPtr:
+def context_init(mem_size: int, mem_buffer: Optional[bytes] = None, no_alloc: bool = False) -> Context:
     """Initialize GGML context"""
     ...
 
-def context_free(ctx: ContextPtr) -> None:
+def context_free(ctx: Context) -> None:
     """Free GGML context and all its allocated memory"""
     ...
 
@@ -145,192 +173,192 @@ def blck_size(type: int) -> int:
     ...
 
 # Tensor operations
-def new_tensor_1d(ctx: ContextPtr, type: int, ne0: int) -> TensorPtr:
+def new_tensor_1d(ctx: Context, type: int, ne0: int) -> Tensor:
     """Create a new 1D tensor"""
     ...
 
-def new_tensor_2d(ctx: ContextPtr, type: int, ne0: int, ne1: int) -> TensorPtr:
+def new_tensor_2d(ctx: Context, type: int, ne0: int, ne1: int) -> Tensor:
     """Create a new 2D tensor"""
     ...
 
-def new_tensor_3d(ctx: ContextPtr, type: int, ne0: int, ne1: int, ne2: int) -> TensorPtr:
+def new_tensor_3d(ctx: Context, type: int, ne0: int, ne1: int, ne2: int) -> Tensor:
     """Create a new 3D tensor"""
     ...
 
-def new_tensor_4d(ctx: ContextPtr, type: int, ne0: int, ne1: int, ne2: int, ne3: int) -> TensorPtr:
+def new_tensor_4d(ctx: Context, type: int, ne0: int, ne1: int, ne2: int, ne3: int) -> Tensor:
     """Create a new 4D tensor"""
     ...
 
-def get_data(tensor: TensorPtr) -> int:
+def get_data(tensor: Tensor) -> int:
     """Get data pointer from tensor (as uintptr_t)"""
     ...
 
-def get_data_f32(tensor: TensorPtr) -> int:
+def get_data_f32(tensor: Tensor) -> int:
     """Get float32 data pointer from tensor (as uintptr_t)"""
     ...
 
-def tensor_ne(tensor: TensorPtr, dim: int) -> int:
+def tensor_ne(tensor: Tensor, dim: int) -> int:
     """Get tensor dimension size"""
     ...
 
-def tensor_nb(tensor: TensorPtr, dim: int) -> int:
+def tensor_nb(tensor: Tensor, dim: int) -> int:
     """Get tensor stride in bytes"""
     ...
 
-def tensor_type(tensor: TensorPtr) -> int:
+def tensor_type(tensor: Tensor) -> int:
     """Get tensor type"""
     ...
 
-def nbytes(tensor: TensorPtr) -> int:
+def nbytes(tensor: Tensor) -> int:
     """Get tensor size in bytes"""
     ...
 
-def nelements(tensor: TensorPtr) -> int:
+def nelements(tensor: Tensor) -> int:
     """Get number of elements in tensor"""
     ...
 
-def set_input(tensor: TensorPtr) -> None:
+def set_input(tensor: Tensor) -> None:
     """Mark tensor as graph input (allocated at graph start in non-overlapping addresses)"""
     ...
 
-def set_output(tensor: TensorPtr) -> None:
+def set_output(tensor: Tensor) -> None:
     """Mark tensor as graph output (never freed or overwritten during computation)"""
     ...
 
-def get_tensor(ctx: ContextPtr, name: str) -> TensorPtr:
+def get_tensor(ctx: Context, name: str) -> Tensor:
     """Get tensor from context by name"""
     ...
 
-def set_name(tensor: TensorPtr, name: str) -> TensorPtr:
+def set_name(tensor: Tensor, name: str) -> Tensor:
     """Set tensor name"""
     ...
 
 # Computation graph
-def new_graph(ctx: ContextPtr) -> GraphPtr:
+def new_graph(ctx: Context) -> Graph:
     """Create a new computation graph"""
     ...
 
-def new_graph_custom(ctx: ContextPtr, size: int, grads: bool) -> GraphPtr:
+def new_graph_custom(ctx: Context, size: int, grads: bool) -> Graph:
     """Create a new computation graph with custom size and gradient settings"""
     ...
 
-def mul_mat(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+def mul_mat(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
     """Matrix multiplication: result = a * b^T"""
     ...
 
 # Binary operations
-def add(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+def add(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
     """Element-wise addition: result = a + b"""
     ...
 
-def sub(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+def sub(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
     """Element-wise subtraction: result = a - b"""
     ...
 
-def mul(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+def mul(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
     """Element-wise multiplication: result = a * b"""
     ...
 
-def div(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+def div(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
     """Element-wise division: result = a / b"""
     ...
 
-def add1(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+def add1(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
     """Add scalar b to each row of matrix a"""
     ...
 
-def out_prod(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+def out_prod(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
     """Outer product: result = a @ b^T"""
     ...
 
-def concat(ctx: ContextPtr, a: TensorPtr, b: TensorPtr, dim: int) -> TensorPtr:
+def concat(ctx: Context, a: Tensor, b: Tensor, dim: int) -> Tensor:
     """Concatenate tensors a and b along dimension dim"""
     ...
 
-def count_equal(ctx: ContextPtr, a: TensorPtr, b: TensorPtr) -> TensorPtr:
+def count_equal(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
     """Count number of equal elements in a and b"""
     ...
 
 # Unary operations
-def abs(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def abs(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise absolute value: result = |a|"""
     ...
 
-def neg(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def neg(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise negation: result = -a"""
     ...
 
-def sqrt(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def sqrt(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise square root: result = sqrt(a)"""
     ...
 
-def sqr(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def sqr(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise square: result = a^2"""
     ...
 
-def log(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def log(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise natural logarithm: result = log(a)"""
     ...
 
-def exp(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def exp(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise exponential: result = exp(a)"""
     ...
 
-def tanh(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def tanh(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise hyperbolic tangent: result = tanh(a)"""
     ...
 
-def sigmoid(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def sigmoid(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise sigmoid activation: result = 1 / (1 + exp(-a))"""
     ...
 
-def relu(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def relu(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise ReLU activation: result = max(0, a)"""
     ...
 
-def gelu(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def gelu(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise GELU activation (Gaussian Error Linear Unit)"""
     ...
 
 # Reduction operations
-def sum(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def sum(ctx: Context, a: Tensor) -> Tensor:
     """Sum all elements in tensor, returns scalar"""
     ...
 
-def mean(ctx: ContextPtr, a: TensorPtr) -> TensorPtr:
+def mean(ctx: Context, a: Tensor) -> Tensor:
     """Mean of all elements along rows"""
     ...
 
-def build_forward_expand(cgraph: GraphPtr, tensor: TensorPtr) -> None:
+def build_forward_expand(cgraph: Graph, tensor: Tensor) -> None:
     """Build forward computation graph from tensor"""
     ...
 
-def graph_compute_with_ctx(ctx: ContextPtr, cgraph: GraphPtr, n_threads: int = 1) -> int:
+def graph_compute_with_ctx(ctx: Context, cgraph: Graph, n_threads: int = 1) -> int:
     """Compute the graph with given context and thread count"""
     ...
 
-def graph_node(cgraph: GraphPtr, i: int) -> TensorPtr:
+def graph_node(cgraph: Graph, i: int) -> Tensor:
     """Get node from graph by index"""
     ...
 
 # Graph allocator
-def gallocr_new(buffer_type: BufferPtr) -> AllocatorPtr:
+def gallocr_new(buffer_type: BufferType) -> GAllocr:
     """Create new graph allocator"""
     ...
 
-def gallocr_reserve(allocr: AllocatorPtr, cgraph: GraphPtr) -> bool:
+def gallocr_reserve(allocr: GAllocr, cgraph: Graph) -> bool:
     """Reserve memory for graph computation"""
     ...
 
-def gallocr_alloc_graph(allocr: AllocatorPtr, cgraph: GraphPtr) -> bool:
+def gallocr_alloc_graph(allocr: GAllocr, cgraph: Graph) -> bool:
     """Allocate tensors for graph computation"""
     ...
 
-def gallocr_get_buffer_size(allocr: AllocatorPtr, buffer_index: int = 0) -> int:
+def gallocr_get_buffer_size(allocr: GAllocr, buffer_index: int = 0) -> int:
     """Get buffer size for allocated graph"""
     ...
 
-def gallocr_free(allocr: AllocatorPtr) -> None:
+def gallocr_free(allocr: GAllocr) -> None:
     """Free graph allocator"""
     ...
 
