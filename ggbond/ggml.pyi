@@ -197,6 +197,14 @@ def set_output(tensor: TensorPtr) -> None:
     """Mark tensor as graph output (never freed or overwritten during computation)"""
     ...
 
+def get_tensor(ctx: ContextPtr, name: str) -> TensorPtr:
+    """Get tensor from context by name"""
+    ...
+
+def set_name(tensor: TensorPtr, name: str) -> TensorPtr:
+    """Set tensor name"""
+    ...
+
 # Computation graph
 def new_graph(ctx: ContextPtr) -> GraphPtr:
     """Create a new computation graph"""
