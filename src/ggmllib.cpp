@@ -427,4 +427,18 @@ PYBIND11_MODULE(ggml, m) {
     m.def("set_output", [](void* tensor) {
         ggml_set_output(static_cast<ggml_tensor*>(tensor));
     }, "Mark tensor as graph output (never freed or overwritten during computation)", py::arg("tensor"));
+
+    m.def("get_tensor", [](void* ctx, const char* name) {
+        return static_cast<void*>(ggml_get_tensor(
+            static_cast<ggml_context*>(ctx),
+            name
+        ));
+    }, "Get tensor from context by name", py::arg("ctx"), py::arg("name"));
+
+    m.def("set_name", [](void* tensor, const char* name) {
+        return static_cast<void*>(ggml_set_name(
+            static_cast<ggml_tensor*>(tensor),
+            name
+        ));
+    }, "Set tensor name", py::arg("tensor"), py::arg("name"));
 }
