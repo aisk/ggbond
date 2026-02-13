@@ -5,7 +5,6 @@ This file contains type annotations for the GGML Python bindings implemented in 
 """
 
 from __future__ import annotations
-from typing import Optional, Union
 import numpy as np
 
 # Opaque pointer types
@@ -44,6 +43,11 @@ class GAllocr:
     def __repr__(self) -> str: ...
     def __bool__(self) -> bool: ...
 
+class GGUFContext:
+    """Opaque pointer to gguf_context"""
+    def __repr__(self) -> str: ...
+    def __bool__(self) -> bool: ...
+
 class Type:
     """GGML data type enumeration"""
     F32: int
@@ -74,6 +78,12 @@ class Type:
     I64: int
     F64: int
     IQ1_M: int
+
+class OpPool:
+    """GGML pooling operation enumeration"""
+    MAX: int
+    AVG: int
+    COUNT: int
 
 class Status:
     """GGML status enumeration"""
@@ -144,7 +154,7 @@ def backend_free(backend: Backend) -> None:
     ...
 
 # Memory management and context
-def context_init(mem_size: int, mem_buffer: Optional[bytes] = None, no_alloc: bool = False) -> Context:
+def context_init(mem_size: int, mem_buffer: bytes | None = None, no_alloc: bool = False) -> Context:
     """Initialize GGML context"""
     ...
 
@@ -391,6 +401,32 @@ def gallocr_get_buffer_size(allocr: GAllocr, buffer_index: int = 0) -> int:
 
 def gallocr_free(allocr: GAllocr) -> None:
     """Free graph allocator"""
+    ...
+
+# Pooling operations
+def pool_1d(ctx: Context, a: Tensor, op: OpPool, k0: int, s0: int, p0: int) -> Tensor:
+    """1D pooling (max or average)"""
+    ...
+
+# GGUF functions
+def gguf_init_from_file(fname: str, no_alloc: bool = True) -> tuple[GGUFContext, Context]:
+    """Initialize GGUF context from file, returns (gguf_ctx, meta_ctx) tuple"""
+    ...
+
+def gguf_free(ctx: GGUFContext) -> None:
+    """Free GGUF context"""
+    ...
+
+def gguf_get_n_tensors(ctx: GGUFContext) -> int:
+    """Get number of tensors in GGUF file"""
+    ...
+
+def gguf_get_data_offset(ctx: GGUFContext) -> int:
+    """Get data offset in GGUF file"""
+    ...
+
+def gguf_get_tensor_offset(ctx: GGUFContext, tensor_id: int) -> int:
+    """Get tensor offset in GGUF file"""
     ...
 
 # Time utilities
