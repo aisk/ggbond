@@ -5,6 +5,7 @@
 #include <ggml-cpu.h>
 #include <ggml-backend.h>
 #include <ggml-alloc.h>
+#include <gguf.h>
 #ifdef __APPLE__
 #include <ggml-metal.h>
 #endif
@@ -29,6 +30,7 @@ struct ggml_backend_tag {};
 struct ggml_backend_buffer_tag {};
 struct ggml_backend_buffer_type_tag {};
 struct ggml_gallocr_tag {};
+struct gguf_context_tag {};
 
 // Aliases
 using ContextPtr = TypedPtr<ggml_context_tag>;
@@ -38,6 +40,7 @@ using BackendPtr = TypedPtr<ggml_backend_tag>;
 using BufferPtr = TypedPtr<ggml_backend_buffer_tag>;
 using BufferTypePtr = TypedPtr<ggml_backend_buffer_type_tag>;
 using GAllocrPtr = TypedPtr<ggml_gallocr_tag>;
+using GGUFContextPtr = TypedPtr<gguf_context_tag>;
 
 // Type extraction helper for high-frequency struct pointer types
 template<typename T, typename Tag>
@@ -66,6 +69,7 @@ PYBIND11_MODULE(ggml, m) {
     REGISTER_PTR(BufferPtr, "Buffer");
     REGISTER_PTR(BufferTypePtr, "BufferType");
     REGISTER_PTR(GAllocrPtr, "GAllocr");
+    REGISTER_PTR(GGUFContextPtr, "GGUFContext");
 
     // Bind ggml_type enum
     py::enum_<ggml_type>(m, "Type")
@@ -403,4 +407,40 @@ PYBIND11_MODULE(ggml, m) {
     m.def("set_name", [](TensorPtr tensor, const char* name) {
         return TensorPtr(ggml_set_name(as<ggml_tensor>(tensor), name));
     }, "Set tensor name", py::arg("tensor"), py::arg("name"));
+
+    // Bind ggml_op_pool enum
+    py::enum_<ggml_op_pool>(m, "OpPool")
+        .value("MAX", GGML_OP_POOL_MAX)
+        .value("AVG", GGML_OP_POOL_AVG)
+        .value("COUNT", GGML_OP_POOL_COUNT)
+        .export_values();
+
+    // Pooling operations
+    m.def("pool_1d", [](ContextPtr ctx, TensorPtr a, ggml_op_pool op, int k0, int s0, int p0) {
+        return TensorPtr(ggml_pool_1d(as<ggml_context>(ctx), as<ggml_tensor>(a), op, k0, s0, p0));
+    }, "1D pooling (max or average)", py::arg("ctx"), py::arg("a"), py::arg("op"), py::arg("k0"), py::arg("s0"), py::arg("p0"));
+
+    // GGUF functions
+    m.def("gguf_init_from_file", [](const char* fname, bool no_alloc) {
+        struct ggml_context* meta_ctx = nullptr;
+        struct gguf_init_params params = { no_alloc, &meta_ctx };
+        struct gguf_context* gguf_ctx = gguf_init_from_file(fname, params);
+        return py::make_tuple(GGUFContextPtr(gguf_ctx), ContextPtr(meta_ctx));
+    }, "Initialize GGUF context from file, returns (gguf_ctx, meta_ctx) tuple", py::arg("fname"), py::arg("no_alloc") = true);
+
+    m.def("gguf_free", [](GGUFContextPtr ctx) {
+        gguf_free(static_cast<struct gguf_context*>(ctx.ptr));
+    }, "Free GGUF context", py::arg("ctx"));
+
+    m.def("gguf_get_n_tensors", [](GGUFContextPtr ctx) {
+        return gguf_get_n_tensors(static_cast<const struct gguf_context*>(ctx.ptr));
+    }, "Get number of tensors in GGUF file", py::arg("ctx"));
+
+    m.def("gguf_get_data_offset", [](GGUFContextPtr ctx) {
+        return gguf_get_data_offset(static_cast<const struct gguf_context*>(ctx.ptr));
+    }, "Get data offset in GGUF file", py::arg("ctx"));
+
+    m.def("gguf_get_tensor_offset", [](GGUFContextPtr ctx, int64_t tensor_id) {
+        return gguf_get_tensor_offset(static_cast<const struct gguf_context*>(ctx.ptr), tensor_id);
+    }, "Get tensor offset in GGUF file", py::arg("ctx"), py::arg("tensor_id"));
 }
