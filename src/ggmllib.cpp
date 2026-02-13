@@ -256,6 +256,34 @@ PYBIND11_MODULE(ggml, m) {
     m.def("mean", [](ContextPtr ctx, TensorPtr a) {
         return TensorPtr(ggml_mean(as<ggml_context>(ctx), as<ggml_tensor>(a)));
     }, "Mean of all elements along rows", py::arg("ctx"), py::arg("a"));
+
+    // Normalization and activation
+    m.def("norm", [](ContextPtr ctx, TensorPtr a, float eps) {
+        return TensorPtr(ggml_norm(as<ggml_context>(ctx), as<ggml_tensor>(a), eps));
+    }, "Normalize tensor along rows", py::arg("ctx"), py::arg("a"), py::arg("eps"));
+
+    m.def("soft_max", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_soft_max(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Apply softmax activation", py::arg("ctx"), py::arg("a"));
+
+    // Reshape operations
+    m.def("reshape_2d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1) {
+        return TensorPtr(ggml_reshape_2d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1));
+    }, "Reshape tensor to 2D", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"));
+
+    m.def("reshape_3d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2) {
+        return TensorPtr(ggml_reshape_3d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2));
+    }, "Reshape tensor to 3D", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"));
+
+    // Transpose and contiguous
+    m.def("transpose", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_transpose(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Transpose tensor (permute 1,0,2,3)", py::arg("ctx"), py::arg("a"));
+
+    m.def("cont", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_cont(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Make tensor contiguous in memory", py::arg("ctx"), py::arg("a"));
+
     m.def("build_forward_expand", [](GraphPtr cgraph, TensorPtr tensor) {
         ggml_build_forward_expand(as<ggml_cgraph>(cgraph), as<ggml_tensor>(tensor));
     }, "Build forward computation graph from tensor", py::arg("cgraph"), py::arg("tensor"));
@@ -305,6 +333,10 @@ PYBIND11_MODULE(ggml, m) {
     m.def("graph_node", [](GraphPtr cgraph, int i) {
         return TensorPtr(ggml_graph_node(as<ggml_cgraph>(cgraph), i));
     }, "Get node from graph by index", py::arg("cgraph"), py::arg("i"));
+
+    m.def("graph_get_tensor", [](GraphPtr cgraph, const char* name) {
+        return TensorPtr(ggml_graph_get_tensor(as<ggml_cgraph>(cgraph), name));
+    }, "Get tensor from graph by name", py::arg("cgraph"), py::arg("name"));
 
     // Backend graph computation
     m.def("backend_graph_compute", [](BackendPtr backend, GraphPtr cgraph) {
