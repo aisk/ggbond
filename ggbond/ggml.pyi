@@ -329,6 +329,33 @@ def mean(ctx: Context, a: Tensor) -> Tensor:
     """Mean of all elements along rows"""
     ...
 
+# Normalization and activation
+def norm(ctx: Context, a: Tensor, eps: float) -> Tensor:
+    """Normalize tensor along rows"""
+    ...
+
+def soft_max(ctx: Context, a: Tensor) -> Tensor:
+    """Apply softmax activation"""
+    ...
+
+# Reshape operations
+def reshape_2d(ctx: Context, a: Tensor, ne0: int, ne1: int) -> Tensor:
+    """Reshape tensor to 2D"""
+    ...
+
+def reshape_3d(ctx: Context, a: Tensor, ne0: int, ne1: int, ne2: int) -> Tensor:
+    """Reshape tensor to 3D"""
+    ...
+
+# Transpose and contiguous
+def transpose(ctx: Context, a: Tensor) -> Tensor:
+    """Transpose tensor (permute 1,0,2,3)"""
+    ...
+
+def cont(ctx: Context, a: Tensor) -> Tensor:
+    """Make tensor contiguous in memory"""
+    ...
+
 def build_forward_expand(cgraph: Graph, tensor: Tensor) -> None:
     """Build forward computation graph from tensor"""
     ...
@@ -339,6 +366,10 @@ def graph_compute_with_ctx(ctx: Context, cgraph: Graph, n_threads: int = 1) -> i
 
 def graph_node(cgraph: Graph, i: int) -> Tensor:
     """Get node from graph by index"""
+    ...
+
+def graph_get_tensor(cgraph: Graph, name: str) -> Tensor:
+    """Get tensor from graph by name"""
     ...
 
 # Graph allocator
