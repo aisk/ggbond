@@ -288,6 +288,53 @@ PYBIND11_MODULE(ggml, m) {
         return TensorPtr(ggml_cont(as<ggml_context>(ctx), as<ggml_tensor>(a)));
     }, "Make tensor contiguous in memory", py::arg("ctx"), py::arg("a"));
 
+    m.def("cont_2d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1) {
+        return TensorPtr(ggml_cont_2d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1));
+    }, "Make tensor contiguous with 2D shape", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"));
+
+    m.def("cont_3d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2) {
+        return TensorPtr(ggml_cont_3d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2));
+    }, "Make tensor contiguous with 3D shape", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"));
+
+    // View operations (for KV cache and Q/K/V split)
+    m.def("view_1d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, size_t offset) {
+        return TensorPtr(ggml_view_1d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, offset));
+    }, "Create 1D view of tensor", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("offset"));
+
+    m.def("view_2d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, size_t nb1, size_t offset) {
+        return TensorPtr(ggml_view_2d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, nb1, offset));
+    }, "Create 2D view of tensor", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("nb1"), py::arg("offset"));
+
+    // Embedding lookup
+    m.def("get_rows", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_get_rows(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "Get rows by index (a: data, b: indices)", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    // Permute dimensions (for attention)
+    m.def("permute", [](ContextPtr ctx, TensorPtr a, int axis0, int axis1, int axis2, int axis3) {
+        return TensorPtr(ggml_permute(as<ggml_context>(ctx), as<ggml_tensor>(a), axis0, axis1, axis2, axis3));
+    }, "Permute tensor dimensions", py::arg("ctx"), py::arg("a"), py::arg("axis0"), py::arg("axis1"), py::arg("axis2"), py::arg("axis3"));
+
+    // Scale operation (for attention scaling)
+    m.def("scale", [](ContextPtr ctx, TensorPtr a, float s) {
+        return TensorPtr(ggml_scale(as<ggml_context>(ctx), as<ggml_tensor>(a), s));
+    }, "Scale tensor by scalar", py::arg("ctx"), py::arg("a"), py::arg("s"));
+
+    // Diagonal mask (for causal attention)
+    m.def("diag_mask_inf", [](ContextPtr ctx, TensorPtr a, int n_past) {
+        return TensorPtr(ggml_diag_mask_inf(as<ggml_context>(ctx), as<ggml_tensor>(a), n_past));
+    }, "Apply diagonal mask with -inf for causal attention", py::arg("ctx"), py::arg("a"), py::arg("n_past"));
+
+    // Copy tensor (for KV cache storage)
+    m.def("cpy", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_cpy(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "Copy tensor a to b", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    // Element size helper
+    m.def("element_size", [](TensorPtr tensor) {
+        return ggml_element_size(as<ggml_tensor>(tensor));
+    }, "Get element size in bytes", py::arg("tensor"));
+
     m.def("build_forward_expand", [](GraphPtr cgraph, TensorPtr tensor) {
         ggml_build_forward_expand(as<ggml_cgraph>(cgraph), as<ggml_tensor>(tensor));
     }, "Build forward computation graph from tensor", py::arg("cgraph"), py::arg("tensor"));
