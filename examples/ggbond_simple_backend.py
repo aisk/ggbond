@@ -3,10 +3,8 @@ import sys
 
 import numpy as np
 
+import ggbond
 from ggbond import ggml
-from ggbond.backend import Backend
-from ggbond.context import Context
-from ggbond.graph import GraphRunner
 
 
 def main():
@@ -42,35 +40,32 @@ def main():
     rows_a, cols_a = matrix_a.shape
     rows_b, cols_b = matrix_b.shape
 
-    with Backend(backend_type) as backend:
-        with Context(n_tensors=2) as ctx_model:
-            tensor_a = ctx_model.new_tensor(ggml.Type.F32, cols_a, rows_a)
-            tensor_b = ctx_model.new_tensor(ggml.Type.F32, cols_b, rows_b)
-            buffer = backend.alloc_ctx(ctx_model)
+    with ggbond.Session(backend_type) as s:
+        ctx_model = s.context(n_tensors=2)
+        tensor_a = ctx_model.new_tensor(ggml.Type.F32, cols_a, rows_a)
+        tensor_b = ctx_model.new_tensor(ggml.Type.F32, cols_b, rows_b)
+        s.alloc(ctx_model)
 
-            backend.tensor_set(tensor_a, matrix_a)
-            backend.tensor_set(tensor_b, matrix_b)
+        s.set(tensor_a, matrix_a)
+        s.set(tensor_b, matrix_b)
 
-            with Context.for_graph() as ctx_graph:
-                result = ggml.mul_mat(ctx_graph.raw, tensor_a, tensor_b)
-                graph = ctx_graph.new_graph()
-                ggml.build_forward_expand(graph, result)
+        ctx_graph = s.graph_context()
+        result = ggml.mul_mat(ctx_graph.raw, tensor_a, tensor_b)
+        graph = ctx_graph.new_graph()
+        ggml.build_forward_expand(graph, result)
 
-                with GraphRunner(backend) as runner:
-                    mem_size = runner.reserve(graph)
-                    print(f"compute buffer size: {mem_size / 1024.0:.4f} KB")
+        mem_size = s.reserve(graph)
+        print(f"compute buffer size: {mem_size / 1024.0:.4f} KB")
 
-                    runner.compute(graph)
+        s.run(graph)
 
-                    result_tensor = ggml.graph_node(graph, -1)
-                    result_ne0 = ggml.tensor_ne(result_tensor, 0)
-                    result_ne1 = ggml.tensor_ne(result_tensor, 1)
-                    out = runner.get(graph, result_tensor)
+        result_tensor = ggml.graph_node(graph, -1)
+        result_ne0 = ggml.tensor_ne(result_tensor, 0)
+        result_ne1 = ggml.tensor_ne(result_tensor, 1)
+        out = s.get(graph, result_tensor)
 
-                print(f"mul mat ({result_ne0} x {result_ne1}) (transposed result):")
-                print(out.reshape(result_ne1, result_ne0))
-
-            ggml.backend_buffer_free(buffer)
+        print(f"mul mat ({result_ne0} x {result_ne1}) (transposed result):")
+        print(out.reshape(result_ne1, result_ne0))
 
 
 if __name__ == "__main__":
