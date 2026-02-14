@@ -5,7 +5,8 @@ This file contains type annotations for the GGML Python bindings implemented in 
 """
 
 from __future__ import annotations
-import numpy as np
+from collections import abc
+
 
 # Opaque pointer types
 class Context:
@@ -51,49 +52,49 @@ class GGUFContext:
 class Type:
     """GGML data type enumeration"""
 
-    F32: int
-    F16: int
-    Q4_0: int
-    Q4_1: int
-    Q5_0: int
-    Q5_1: int
-    Q8_0: int
-    Q8_1: int
-    Q2_K: int
-    Q3_K: int
-    Q4_K: int
-    Q5_K: int
-    Q6_K: int
-    Q8_K: int
-    IQ2_XXS: int
-    IQ2_XS: int
-    IQ3_XXS: int
-    IQ1_S: int
-    IQ4_NL: int
-    IQ3_S: int
-    IQ2_S: int
-    IQ4_XS: int
-    I8: int
-    I16: int
-    I32: int
-    I64: int
-    F64: int
-    IQ1_M: int
+    F32: Type
+    F16: Type
+    Q4_0: Type
+    Q4_1: Type
+    Q5_0: Type
+    Q5_1: Type
+    Q8_0: Type
+    Q8_1: Type
+    Q2_K: Type
+    Q3_K: Type
+    Q4_K: Type
+    Q5_K: Type
+    Q6_K: Type
+    Q8_K: Type
+    IQ2_XXS: Type
+    IQ2_XS: Type
+    IQ3_XXS: Type
+    IQ1_S: Type
+    IQ4_NL: Type
+    IQ3_S: Type
+    IQ2_S: Type
+    IQ4_XS: Type
+    I8: Type
+    I16: Type
+    I32: Type
+    I64: Type
+    F64: Type
+    IQ1_M: Type
 
 class OpPool:
     """GGML pooling operation enumeration"""
 
-    MAX: int
-    AVG: int
-    COUNT: int
+    MAX: OpPool
+    AVG: OpPool
+    COUNT: OpPool
 
 class Status:
     """GGML status enumeration"""
 
-    ALLOC_FAILED: int
-    FAILED: int
-    SUCCESS: int
-    ABORTED: int
+    ALLOC_FAILED: Status
+    FAILED: Status
+    SUCCESS: Status
+    ABORTED: Status
 
 # Core functions
 def log_set_default() -> None: ...
@@ -137,13 +138,13 @@ def backend_alloc_ctx_tensors(ctx: Context, backend: Backend) -> Buffer:
     ...
 
 def backend_tensor_set(
-    tensor: Tensor, data: buffer, offset: int = 0, size: int = 0
+    tensor: Tensor, data: abc.Buffer, offset: int = 0, size: int = 0
 ) -> None:
     """Set tensor data from Python buffer"""
     ...
 
 def backend_tensor_get(
-    tensor: Tensor, data: buffer, offset: int = 0, size: int = 0
+    tensor: Tensor, data: abc.Buffer, offset: int = 0, size: int = 0
 ) -> None:
     """Get tensor data to Python buffer"""
     ...
