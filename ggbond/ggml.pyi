@@ -251,6 +251,38 @@ def nelements(tensor: Tensor) -> int:
     """Get number of elements in tensor"""
     ...
 
+def n_dims(tensor: Tensor) -> int:
+    """Get number of dimensions"""
+    ...
+
+def nrows(tensor: Tensor) -> int:
+    """Get number of rows"""
+    ...
+
+def get_name(tensor: Tensor) -> str:
+    """Get tensor name"""
+    ...
+
+def is_contiguous(tensor: Tensor) -> bool:
+    """Check if tensor is contiguous"""
+    ...
+
+def is_transposed(tensor: Tensor) -> bool:
+    """Check if tensor is transposed"""
+    ...
+
+def is_permuted(tensor: Tensor) -> bool:
+    """Check if tensor is permuted"""
+    ...
+
+def is_quantized(type: Type) -> bool:
+    """Check if type is quantized"""
+    ...
+
+def are_same_shape(a: Tensor, b: Tensor) -> bool:
+    """Check if two tensors have the same shape"""
+    ...
+
 def set_input(tensor: Tensor) -> None:
     """Mark tensor as graph input (allocated at graph start in non-overlapping addresses)"""
     ...
@@ -338,6 +370,18 @@ def exp(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise exponential: result = exp(a)"""
     ...
 
+def sin(ctx: Context, a: Tensor) -> Tensor:
+    """Element-wise sine"""
+    ...
+
+def cos(ctx: Context, a: Tensor) -> Tensor:
+    """Element-wise cosine"""
+    ...
+
+def sgn(ctx: Context, a: Tensor) -> Tensor:
+    """Element-wise sign function"""
+    ...
+
 def tanh(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise hyperbolic tangent: result = tanh(a)"""
     ...
@@ -354,13 +398,45 @@ def gelu(ctx: Context, a: Tensor) -> Tensor:
     """Element-wise GELU activation (Gaussian Error Linear Unit)"""
     ...
 
+def silu(ctx: Context, a: Tensor) -> Tensor:
+    """SiLU activation (x * sigmoid(x))"""
+    ...
+
+def leaky_relu(ctx: Context, a: Tensor, negative_slope: float, inplace: bool) -> Tensor:
+    """Leaky ReLU activation"""
+    ...
+
+def gelu_quick(ctx: Context, a: Tensor) -> Tensor:
+    """Fast GELU approximation"""
+    ...
+
+def hardswish(ctx: Context, a: Tensor) -> Tensor:
+    """Hard swish activation"""
+    ...
+
+def hardsigmoid(ctx: Context, a: Tensor) -> Tensor:
+    """Hard sigmoid activation"""
+    ...
+
+def elu(ctx: Context, a: Tensor) -> Tensor:
+    """ELU activation"""
+    ...
+
 # Reduction operations
 def sum(ctx: Context, a: Tensor) -> Tensor:
     """Sum all elements in tensor, returns scalar"""
     ...
 
+def sum_rows(ctx: Context, a: Tensor) -> Tensor:
+    """Sum elements along rows"""
+    ...
+
 def mean(ctx: Context, a: Tensor) -> Tensor:
     """Mean of all elements along rows"""
+    ...
+
+def argmax(ctx: Context, a: Tensor) -> Tensor:
+    """Argmax along rows"""
     ...
 
 # Normalization and activation
@@ -368,17 +444,39 @@ def norm(ctx: Context, a: Tensor, eps: float) -> Tensor:
     """Normalize tensor along rows"""
     ...
 
+def rms_norm(ctx: Context, a: Tensor, eps: float) -> Tensor:
+    """RMS normalization"""
+    ...
+
+def group_norm(ctx: Context, a: Tensor, n_groups: int, eps: float) -> Tensor:
+    """Group normalization"""
+    ...
+
+def l2_norm(ctx: Context, a: Tensor, eps: float) -> Tensor:
+    """L2 normalization"""
+    ...
+
 def soft_max(ctx: Context, a: Tensor) -> Tensor:
     """Apply softmax activation"""
     ...
 
 # Reshape operations
+def reshape_1d(ctx: Context, a: Tensor, ne0: int) -> Tensor:
+    """Reshape tensor to 1D"""
+    ...
+
 def reshape_2d(ctx: Context, a: Tensor, ne0: int, ne1: int) -> Tensor:
     """Reshape tensor to 2D"""
     ...
 
 def reshape_3d(ctx: Context, a: Tensor, ne0: int, ne1: int, ne2: int) -> Tensor:
     """Reshape tensor to 3D"""
+    ...
+
+def reshape_4d(
+    ctx: Context, a: Tensor, ne0: int, ne1: int, ne2: int, ne3: int
+) -> Tensor:
+    """Reshape tensor to 4D"""
     ...
 
 # Transpose and contiguous
@@ -390,12 +488,22 @@ def cont(ctx: Context, a: Tensor) -> Tensor:
     """Make tensor contiguous in memory"""
     ...
 
+def cont_1d(ctx: Context, a: Tensor, ne0: int) -> Tensor:
+    """Make tensor contiguous with 1D shape"""
+    ...
+
 def cont_2d(ctx: Context, a: Tensor, ne0: int, ne1: int) -> Tensor:
     """Make tensor contiguous with 2D shape"""
     ...
 
 def cont_3d(ctx: Context, a: Tensor, ne0: int, ne1: int, ne2: int) -> Tensor:
     """Make tensor contiguous with 3D shape"""
+    ...
+
+def cont_4d(
+    ctx: Context, a: Tensor, ne0: int, ne1: int, ne2: int, ne3: int
+) -> Tensor:
+    """Make tensor contiguous with 4D shape"""
     ...
 
 # View operations (for KV cache and Q/K/V split)
@@ -407,6 +515,34 @@ def view_2d(
     ctx: Context, a: Tensor, ne0: int, ne1: int, nb1: int, offset: int
 ) -> Tensor:
     """Create 2D view of tensor"""
+    ...
+
+def view_3d(
+    ctx: Context,
+    a: Tensor,
+    ne0: int,
+    ne1: int,
+    ne2: int,
+    nb1: int,
+    nb2: int,
+    offset: int,
+) -> Tensor:
+    """Create 3D view of tensor"""
+    ...
+
+def view_4d(
+    ctx: Context,
+    a: Tensor,
+    ne0: int,
+    ne1: int,
+    ne2: int,
+    ne3: int,
+    nb1: int,
+    nb2: int,
+    nb3: int,
+    offset: int,
+) -> Tensor:
+    """Create 4D view of tensor"""
     ...
 
 # Embedding lookup
@@ -424,6 +560,14 @@ def permute(
 # Math operations
 def scale(ctx: Context, a: Tensor, s: float) -> Tensor:
     """Scale tensor by scalar"""
+    ...
+
+def clamp(ctx: Context, a: Tensor, min: float, max: float) -> Tensor:
+    """Clamp tensor values to [min, max]"""
+    ...
+
+def repeat(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """Repeat tensor a to match shape of b"""
     ...
 
 def diag_mask_inf(ctx: Context, a: Tensor, n_past: int) -> Tensor:
