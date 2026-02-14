@@ -1,11 +1,12 @@
 """Magika file type detector using ggbond Session API.
 
 Usage:
-    python examples/ggbond_magika.py <model.gguf> <file1> [file2 ...] [--backend cpu|metal]
+    python examples/magika.py <model.gguf> <file1> [file2 ...] [--backend cpu|metal]
 """
 
 import argparse
 import os
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -40,129 +41,185 @@ MAGIKA_LABELS = [
     "yaml",            "zip",             "zlibstream",
 ]
 
-BEG_SIZE = 512
-MID_SIZE = 512
-END_SIZE = 512
-N_LABEL = 113
-F_NORM_EPS = 0.001
-PADDING_TOKEN = 256
-INP_BYTES = BEG_SIZE + MID_SIZE + END_SIZE
+
+@dataclass
+class Prediction:
+    """Single file type prediction result."""
+    label: str
+    score: float
+
+    def __str__(self):
+        return f"{self.label} ({self.score * 100:.2f}%)"
 
 
-def build_graph(tensors, n_files):
-    """Build computation graph matching C++ magika_graph."""
-    ctx = Context.for_graph()
-    gf = ctx.new_graph()
+class Magika:
+    """Magika file type detector."""
 
-    inp = ctx.new_tensor(ggml.Type.F32, 257, INP_BYTES, n_files, name="input")
-    ggml.set_input(inp)
+    BEG_SIZE = 512
+    MID_SIZE = 512
+    END_SIZE = 512
+    N_LABEL = 113
+    F_NORM_EPS = 0.001
+    PADDING_TOKEN = 256
+    INP_BYTES = BEG_SIZE + MID_SIZE + END_SIZE
 
-    # dense
-    cur = ggml.mul_mat(ctx.raw, tensors["dense/kernel:0"], inp)
-    cur = ggml.add(ctx.raw, cur, tensors["dense/bias:0"])
-    cur = ggml.gelu(ctx.raw, cur)
+    def __init__(self, model_path: str, *, backend: str = "cpu"):
+        self._session = ggbond.Session(backend)
+        _, self._tensors = self._session.load_gguf(model_path)
 
-    # reshape
-    cur = ggml.reshape_3d(ctx.raw, cur, 512, 384, n_files)
-    cur = ggml.cont(ctx.raw, ggml.transpose(ctx.raw, cur))
+    def predict(self, files: list[str], *, top_k: int = 5) -> list[list[Prediction]]:
+        """Predict file types for a list of files.
 
-    # layer normalization
-    cur = ggml.norm(ctx.raw, cur, F_NORM_EPS)
-    cur = ggml.mul(ctx.raw, cur, tensors["layer_normalization/gamma:0"])
-    cur = ggml.add(ctx.raw, cur, tensors["layer_normalization/beta:0"])
+        Returns a list of top-k predictions per file.
+        """
+        n_files = len(files)
+        gf, _ctx_graph = self._build_graph(n_files)
 
-    # dense_1
-    cur = ggml.cont(ctx.raw, ggml.transpose(ctx.raw, cur))
-    cur = ggml.mul_mat(ctx.raw, tensors["dense_1/kernel:0"], cur)
-    cur = ggml.add(ctx.raw, cur, tensors["dense_1/bias:0"])
-    cur = ggml.gelu(ctx.raw, cur)
+        inputs = np.concatenate([self._preprocess_file(f) for f in files])
+        self._session.run(gf, inputs={"input": inputs})
 
-    # dense_2
-    cur = ggml.mul_mat(ctx.raw, tensors["dense_2/kernel:0"], cur)
-    cur = ggml.add(ctx.raw, cur, tensors["dense_2/bias:0"])
-    cur = ggml.gelu(ctx.raw, cur)
+        all_probs = self._session.get(gf, "target_label_probs")
+        all_probs = all_probs.reshape(n_files, self.N_LABEL)
 
-    # global_max_pooling1d
-    cur = ggml.cont(ctx.raw, ggml.transpose(ctx.raw, cur))
-    cur = ggml.pool_1d(ctx.raw, cur, ggml.OpPool.MAX, 384, 384, 0)
-    cur = ggml.reshape_2d(ctx.raw, cur, 256, n_files)
+        results = []
+        for probs in all_probs:
+            top_indices = np.argsort(probs)[::-1][:top_k]
+            results.append([
+                Prediction(MAGIKA_LABELS[i], probs[i]) for i in top_indices
+            ])
+        return results
 
-    # layer normalization 1
-    cur = ggml.norm(ctx.raw, cur, F_NORM_EPS)
-    cur = ggml.mul(ctx.raw, cur, tensors["layer_normalization_1/gamma:0"])
-    cur = ggml.add(ctx.raw, cur, tensors["layer_normalization_1/beta:0"])
+    def close(self):
+        self._session.close()
 
-    # target_label
-    cur = ggml.mul_mat(ctx.raw, tensors["target_label/kernel:0"], cur)
-    cur = ggml.add(ctx.raw, cur, tensors["target_label/bias:0"])
-    cur = ggml.soft_max(ctx.raw, cur)
-    ggml.set_name(cur, "target_label_probs")
-    ggml.set_output(cur)
+    def __enter__(self):
+        return self
 
-    ggml.build_forward_expand(gf, cur)
-    return gf, ctx
+    def __exit__(self, *exc):
+        self.close()
+
+    def _build_graph(self, n_files: int):
+        """Build computation graph for the magika model."""
+        ctx = Context.for_graph()
+        gf = ctx.new_graph()
+        tensors = self._tensors
+
+        inp = ctx.new_tensor(ggml.Type.F32, 257, self.INP_BYTES, n_files, name="input")
+        ggml.set_input(inp)
+
+        # dense
+        cur = ggml.mul_mat(ctx.raw, tensors["dense/kernel:0"], inp)
+        cur = ggml.add(ctx.raw, cur, tensors["dense/bias:0"])
+        cur = ggml.gelu(ctx.raw, cur)
+
+        # reshape
+        cur = ggml.reshape_3d(ctx.raw, cur, 512, 384, n_files)
+        cur = ggml.cont(ctx.raw, ggml.transpose(ctx.raw, cur))
+
+        # layer normalization
+        cur = ggml.norm(ctx.raw, cur, self.F_NORM_EPS)
+        cur = ggml.mul(ctx.raw, cur, tensors["layer_normalization/gamma:0"])
+        cur = ggml.add(ctx.raw, cur, tensors["layer_normalization/beta:0"])
+
+        # dense_1
+        cur = ggml.cont(ctx.raw, ggml.transpose(ctx.raw, cur))
+        cur = ggml.mul_mat(ctx.raw, tensors["dense_1/kernel:0"], cur)
+        cur = ggml.add(ctx.raw, cur, tensors["dense_1/bias:0"])
+        cur = ggml.gelu(ctx.raw, cur)
+
+        # dense_2
+        cur = ggml.mul_mat(ctx.raw, tensors["dense_2/kernel:0"], cur)
+        cur = ggml.add(ctx.raw, cur, tensors["dense_2/bias:0"])
+        cur = ggml.gelu(ctx.raw, cur)
+
+        # global_max_pooling1d
+        cur = ggml.cont(ctx.raw, ggml.transpose(ctx.raw, cur))
+        cur = ggml.pool_1d(ctx.raw, cur, ggml.OpPool.MAX, 384, 384, 0)
+        cur = ggml.reshape_2d(ctx.raw, cur, 256, n_files)
+
+        # layer normalization 1
+        cur = ggml.norm(ctx.raw, cur, self.F_NORM_EPS)
+        cur = ggml.mul(ctx.raw, cur, tensors["layer_normalization_1/gamma:0"])
+        cur = ggml.add(ctx.raw, cur, tensors["layer_normalization_1/beta:0"])
+
+        # target_label
+        cur = ggml.mul_mat(ctx.raw, tensors["target_label/kernel:0"], cur)
+        cur = ggml.add(ctx.raw, cur, tensors["target_label/bias:0"])
+        cur = ggml.soft_max(ctx.raw, cur)
+        ggml.set_name(cur, "target_label_probs")
+        ggml.set_output(cur)
+
+        ggml.build_forward_expand(gf, cur)
+        return gf, ctx
+
+    @staticmethod
+    def _read_segment(f, offset: int, size: int) -> np.ndarray:
+        """Read a segment of bytes from file at the given offset."""
+        f.seek(offset)
+        data = f.read(size)
+        return np.frombuffer(data, dtype=np.uint8)
+
+    @classmethod
+    def _preprocess_file(cls, fpath: str) -> np.ndarray:
+        """Read file beg/mid/end and convert to one-hot encoding."""
+        fsize = os.path.getsize(fpath)
+        buf = np.full(cls.INP_BYTES, cls.PADDING_TOKEN, dtype=np.int32)
+
+        with open(fpath, "rb") as f:
+            # beginning
+            beg = cls._read_segment(f, 0, cls.BEG_SIZE)
+            buf[:len(beg)] = beg
+
+            # middle (centered)
+            mid_offset = max(0, (fsize - cls.MID_SIZE) // 2)
+            mid = cls._read_segment(f, mid_offset, cls.MID_SIZE)
+            mid_start = cls.BEG_SIZE + (cls.MID_SIZE - len(mid)) // 2
+            buf[mid_start:mid_start + len(mid)] = mid
+
+            # end (right-aligned)
+            end_offset = max(0, fsize - cls.END_SIZE)
+            end = cls._read_segment(f, end_offset, cls.END_SIZE)
+            end_start = cls.BEG_SIZE + cls.MID_SIZE + cls.END_SIZE - len(end)
+            buf[end_start:end_start + len(end)] = end
+
+        one_hot = np.zeros((cls.INP_BYTES, 257), dtype=np.float32)
+        one_hot[np.arange(cls.INP_BYTES), buf] = 1.0
+        return one_hot.ravel()
 
 
-def preprocess_file(fpath):
-    """Read file beg/mid/end and convert to one-hot encoding."""
-    fsize = os.path.getsize(fpath)
-    buf = np.full(INP_BYTES, PADDING_TOKEN, dtype=np.int32)
-
-    with open(fpath, "rb") as f:
-        beg_data = f.read(BEG_SIZE)
-        buf[:len(beg_data)] = np.frombuffer(beg_data, dtype=np.uint8)
-
-        mid_offs = max(0, (fsize - MID_SIZE) // 2)
-        f.seek(mid_offs)
-        mid_data = f.read(MID_SIZE)
-        n_read = len(mid_data)
-        mid_start = BEG_SIZE + (MID_SIZE // 2) - n_read // 2
-        buf[mid_start:mid_start + n_read] = np.frombuffer(mid_data, dtype=np.uint8)
-
-        end_offs = max(0, fsize - END_SIZE)
-        f.seek(end_offs)
-        end_data = f.read(END_SIZE)
-        n_read = len(end_data)
-        end_start = BEG_SIZE + MID_SIZE + END_SIZE - n_read
-        buf[end_start:end_start + n_read] = np.frombuffer(end_data, dtype=np.uint8)
-
-    one_hot = np.zeros((INP_BYTES, 257), dtype=np.float32)
-    one_hot[np.arange(INP_BYTES), buf] = 1.0
-    return one_hot.ravel()
+def _expand_paths(paths: list[str]) -> list[str]:
+    """Expand directories to their contained files (non-recursive)."""
+    files = []
+    for p in paths:
+        if os.path.isdir(p):
+            files.extend(
+                os.path.join(p, name)
+                for name in sorted(os.listdir(p))
+                if os.path.isfile(os.path.join(p, name))
+            )
+        else:
+            files.append(p)
+    return files
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Magika file type detector (ggbond Session)")
+    parser = argparse.ArgumentParser(description="Magika file type detector")
     parser.add_argument("model_path", help="Path to magika GGUF model")
-    parser.add_argument("files", nargs="+", help="Files to classify")
+    parser.add_argument("files", nargs="+", help="Files or directories to classify")
     parser.add_argument("-b", "--backend", default="cpu", choices=["cpu", "metal"],
                         help="Backend to use (default: cpu)")
     args = parser.parse_args()
 
-    with ggbond.Session(args.backend) as s:
-        ctx_w, tensors = s.load_gguf(args.model_path)
+    files = _expand_paths(args.files)
+    if not files:
+        print("No files to classify.")
+        return
 
-        n_files = len(args.files)
-        gf, ctx_graph = build_graph(tensors, n_files)
-
-        inp_size = 257 * INP_BYTES
-        all_inputs = np.empty(inp_size * n_files, dtype=np.float32)
-        for i, fpath in enumerate(args.files):
-            all_inputs[inp_size * i : inp_size * (i + 1)] = preprocess_file(fpath)
-
-        s.run(gf, inputs={"input": all_inputs})
-
-        for i, fpath in enumerate(args.files):
-            probs = s.get_slice(
-                gf, "target_label_probs",
-                offset=N_LABEL * i * 4, count=N_LABEL,
-            )
-            idx = np.argsort(probs)[::-1]
-            parts = [
-                f"{MAGIKA_LABELS[idx[j]]} ({probs[idx[j]] * 100:.2f}%)"
-                for j in range(5)
-            ]
-            print(f"{fpath:<30s}: {' '.join(parts)}")
+    with Magika(args.model_path, backend=args.backend) as magika:
+        results = magika.predict(files)
+        for fpath, preds in zip(files, results):
+            top_str = " ".join(str(p) for p in preds)
+            print(f"{fpath:<30s}: {top_str}")
 
 
 if __name__ == "__main__":
