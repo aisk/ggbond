@@ -65,6 +65,9 @@ class Context:
 
     # -- lifecycle ------------------------------------------------------------
 
+    def __del__(self) -> None:
+        self.close()
+
     def close(self) -> None:
         """Free the underlying context.  Safe to call multiple times."""
         if self._ctx:
