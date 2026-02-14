@@ -125,6 +125,9 @@ PYBIND11_MODULE(ggml, m) {
 #endif
     m.def("tensor_overhead", &ggml_tensor_overhead, "Get the memory overhead of a tensor");
     m.def("graph_overhead", &ggml_graph_overhead, "Get the memory overhead of a graph");
+    m.def("graph_overhead_custom", [](size_t size, bool grads) {
+        return ggml_graph_overhead_custom(size, grads);
+    }, "Get memory overhead for custom graph size", py::arg("size"), py::arg("grads"));
     m.def("DEFAULT_GRAPH_SIZE", []() { return GGML_DEFAULT_GRAPH_SIZE; }, "Default graph size constant");
     m.def("context_init", [](size_t mem_size, void* mem_buffer = nullptr, bool no_alloc = false) {
         ggml_init_params params = {mem_size, mem_buffer, no_alloc};
@@ -144,12 +147,18 @@ PYBIND11_MODULE(ggml, m) {
     }, "Create a new 4D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"));
     m.def("type_size", &ggml_type_size, "Get size in bytes for all elements in a block of the given type", py::arg("type"));
     m.def("blck_size", &ggml_blck_size, "Get block size (number of elements per block) for the given type", py::arg("type"));
+    m.def("ftype_to_ggml_type", [](int ftype) {
+        return static_cast<int>(ggml_ftype_to_ggml_type(static_cast<ggml_ftype>(ftype)));
+    }, "Convert file type to tensor type", py::arg("ftype"));
     m.def("backend_alloc_ctx_tensors", [](ContextPtr ctx, BackendPtr backend) {
         return BufferPtr(ggml_backend_alloc_ctx_tensors(as<ggml_context>(ctx), static_cast<ggml_backend_t>(backend.ptr)));
     }, "Allocate all tensors in a GGML context to a backend", py::arg("ctx"), py::arg("backend"));
     m.def("backend_buffer_free", [](BufferPtr buffer) {
         ggml_backend_buffer_free(static_cast<ggml_backend_buffer_t>(buffer.ptr));
     }, "Free backend buffer", py::arg("buffer"));
+    m.def("backend_buffer_is_host", [](BufferPtr buffer) {
+        return ggml_backend_buffer_is_host(static_cast<ggml_backend_buffer_t>(buffer.ptr));
+    }, "Check if buffer is in host memory", py::arg("buffer"));
     m.def("backend_tensor_set", [](TensorPtr tensor, py::buffer data, size_t offset, size_t size) {
         py::buffer_info info = data.request();
         size_t data_size = info.itemsize * info.size;
