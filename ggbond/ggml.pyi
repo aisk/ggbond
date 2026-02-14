@@ -50,6 +50,7 @@ class GGUFContext:
 
 class Type:
     """GGML data type enumeration"""
+
     F32: int
     F16: int
     Q4_0: int
@@ -81,12 +82,14 @@ class Type:
 
 class OpPool:
     """GGML pooling operation enumeration"""
+
     MAX: int
     AVG: int
     COUNT: int
 
 class Status:
     """GGML status enumeration"""
+
     ALLOC_FAILED: int
     FAILED: int
     SUCCESS: int
@@ -133,11 +136,15 @@ def backend_alloc_ctx_tensors(ctx: Context, backend: Backend) -> Buffer:
     """Allocate all tensors in a GGML context to a backend"""
     ...
 
-def backend_tensor_set(tensor: Tensor, data: buffer, offset: int = 0, size: int = 0) -> None:
+def backend_tensor_set(
+    tensor: Tensor, data: buffer, offset: int = 0, size: int = 0
+) -> None:
     """Set tensor data from Python buffer"""
     ...
 
-def backend_tensor_get(tensor: Tensor, data: buffer, offset: int = 0, size: int = 0) -> None:
+def backend_tensor_get(
+    tensor: Tensor, data: buffer, offset: int = 0, size: int = 0
+) -> None:
     """Get tensor data to Python buffer"""
     ...
 
@@ -154,7 +161,9 @@ def backend_free(backend: Backend) -> None:
     ...
 
 # Memory management and context
-def context_init(mem_size: int, mem_buffer: bytes | None = None, no_alloc: bool = False) -> Context:
+def context_init(
+    mem_size: int, mem_buffer: bytes | None = None, no_alloc: bool = False
+) -> Context:
     """Initialize GGML context"""
     ...
 
@@ -195,7 +204,9 @@ def new_tensor_3d(ctx: Context, type: int, ne0: int, ne1: int, ne2: int) -> Tens
     """Create a new 3D tensor"""
     ...
 
-def new_tensor_4d(ctx: Context, type: int, ne0: int, ne1: int, ne2: int, ne3: int) -> Tensor:
+def new_tensor_4d(
+    ctx: Context, type: int, ne0: int, ne1: int, ne2: int, ne3: int
+) -> Tensor:
     """Create a new 4D tensor"""
     ...
 
@@ -366,6 +377,56 @@ def cont(ctx: Context, a: Tensor) -> Tensor:
     """Make tensor contiguous in memory"""
     ...
 
+def cont_2d(ctx: Context, a: Tensor, ne0: int, ne1: int) -> Tensor:
+    """Make tensor contiguous with 2D shape"""
+    ...
+
+def cont_3d(ctx: Context, a: Tensor, ne0: int, ne1: int, ne2: int) -> Tensor:
+    """Make tensor contiguous with 3D shape"""
+    ...
+
+# View operations (for KV cache and Q/K/V split)
+def view_1d(ctx: Context, a: Tensor, ne0: int, offset: int) -> Tensor:
+    """Create 1D view of tensor"""
+    ...
+
+def view_2d(
+    ctx: Context, a: Tensor, ne0: int, ne1: int, nb1: int, offset: int
+) -> Tensor:
+    """Create 2D view of tensor"""
+    ...
+
+# Embedding lookup
+def get_rows(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """Get rows by index (a: data, b: indices)"""
+    ...
+
+# Dimension operations
+def permute(
+    ctx: Context, a: Tensor, axis0: int, axis1: int, axis2: int, axis3: int
+) -> Tensor:
+    """Permute tensor dimensions"""
+    ...
+
+# Math operations
+def scale(ctx: Context, a: Tensor, s: float) -> Tensor:
+    """Scale tensor by scalar"""
+    ...
+
+def diag_mask_inf(ctx: Context, a: Tensor, n_past: int) -> Tensor:
+    """Apply diagonal mask with -inf for causal attention"""
+    ...
+
+# Copy operations
+def cpy(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """Copy tensor a to b"""
+    ...
+
+# Helper functions
+def element_size(tensor: Tensor) -> int:
+    """Get element size in bytes"""
+    ...
+
 def build_forward_expand(cgraph: Graph, tensor: Tensor) -> None:
     """Build forward computation graph from tensor"""
     ...
@@ -409,7 +470,9 @@ def pool_1d(ctx: Context, a: Tensor, op: OpPool, k0: int, s0: int, p0: int) -> T
     ...
 
 # GGUF functions
-def gguf_init_from_file(fname: str, no_alloc: bool = True) -> tuple[GGUFContext, Context]:
+def gguf_init_from_file(
+    fname: str, no_alloc: bool = True
+) -> tuple[GGUFContext, Context]:
     """Initialize GGUF context from file, returns (gguf_ctx, meta_ctx) tuple"""
     ...
 
