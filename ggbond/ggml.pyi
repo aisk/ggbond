@@ -512,3 +512,21 @@ def gguf_get_tensor_name(ctx: GGUFContext, tensor_id: int) -> str:
 def time_init() -> None:
     """Initialize time measurement - call this once at the beginning of the program"""
     ...
+
+def time_us() -> int:
+    """Get current time in microseconds"""
+    ...
+
+# Type information
+def type_name(type: int) -> str:
+    """Get type name string"""
+    ...
+
+# Backend buffer
+def backend_buffer_get_size(buffer: Buffer) -> int:
+    """Get buffer size in bytes"""
+    ...
+
+# Constants
+FILE_MAGIC: int
+QNT_VERSION_FACTOR: int
