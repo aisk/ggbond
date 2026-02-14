@@ -1,4 +1,4 @@
-"""Magika file type detector using ggbond OOP API.
+"""Magika file type detector using ggbond Session API.
 
 Usage:
     python examples/ggbond_magika.py <model.gguf> <file1> [file2 ...] [--backend cpu|metal]
@@ -9,10 +9,9 @@ import os
 
 import numpy as np
 
+import ggbond
 from ggbond import ggml
-from ggbond.backend import Backend
 from ggbond.context import Context
-from ggbond.graph import GraphRunner, load_gguf
 
 
 MAGIKA_LABELS = [
@@ -132,24 +131,29 @@ def preprocess_file(fpath):
     return one_hot.ravel()
 
 
-def evaluate(backend, tensors, file_paths):
-    """Run inference and print top-5 results for each file."""
-    n_files = len(file_paths)
-    gf, ctx_graph = build_graph(tensors, n_files)
+def main():
+    parser = argparse.ArgumentParser(description="Magika file type detector (ggbond Session)")
+    parser.add_argument("model_path", help="Path to magika GGUF model")
+    parser.add_argument("files", nargs="+", help="Files to classify")
+    parser.add_argument("-b", "--backend", default="cpu", choices=["cpu", "metal"],
+                        help="Backend to use (default: cpu)")
+    args = parser.parse_args()
 
-    inp_size = 257 * INP_BYTES
+    with ggbond.Session(args.backend) as s:
+        ctx_w, tensors = s.load_gguf(args.model_path)
 
-    # Build combined input data
-    all_inputs = np.empty(inp_size * n_files, dtype=np.float32)
-    for i, fpath in enumerate(file_paths):
-        all_inputs[inp_size * i : inp_size * (i + 1)] = preprocess_file(fpath)
+        n_files = len(args.files)
+        gf, ctx_graph = build_graph(tensors, n_files)
 
-    with GraphRunner(backend) as runner:
-        runner.reserve(gf)
-        runner.compute(gf, inputs={"input": all_inputs})
+        inp_size = 257 * INP_BYTES
+        all_inputs = np.empty(inp_size * n_files, dtype=np.float32)
+        for i, fpath in enumerate(args.files):
+            all_inputs[inp_size * i : inp_size * (i + 1)] = preprocess_file(fpath)
 
-        for i, fpath in enumerate(file_paths):
-            probs = runner.get_slice(
+        s.run(gf, inputs={"input": all_inputs})
+
+        for i, fpath in enumerate(args.files):
+            probs = s.get_slice(
                 gf, "target_label_probs",
                 offset=N_LABEL * i * 4, count=N_LABEL,
             )
@@ -160,24 +164,7 @@ def evaluate(backend, tensors, file_paths):
             ]
             print(f"{fpath:<30s}: {' '.join(parts)}")
 
-    ctx_graph.close()
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Magika file type detector (ggbond OOP)")
-    parser.add_argument("model_path", help="Path to magika GGUF model")
-    parser.add_argument("files", nargs="+", help="Files to classify")
-    parser.add_argument("-b", "--backend", default="cpu", choices=["cpu", "metal"],
-                        help="Backend to use (default: cpu)")
-    args = parser.parse_args()
-
-    with Backend(args.backend) as backend:
-        ctx_w, buf_w, tensors = load_gguf(args.model_path, backend)
-        try:
-            evaluate(backend, tensors, args.files)
-        finally:
-            ggml.context_free(ctx_w)
-            ggml.backend_buffer_free(buf_w)
+        ctx_graph.close()
 
 
 if __name__ == "__main__":

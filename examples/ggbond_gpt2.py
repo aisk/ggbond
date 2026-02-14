@@ -1,5 +1,5 @@
 """
-GPT-2 inference using ggbond OOP API.
+GPT-2 inference using ggbond Session API.
 
 Ported from vendor/ggml/examples/gpt-2/main-backend.cpp
 
@@ -14,7 +14,6 @@ Download model:
 
 import argparse
 import math
-import platform
 import re
 import struct
 import sys
@@ -22,10 +21,9 @@ import random
 
 import numpy as np
 
+import ggbond
 from ggbond import ggml
-from ggbond.backend import Backend
 from ggbond.context import Context
-from ggbond.graph import GraphRunner
 
 GPT2_MAX_NODES = 4096
 
@@ -151,10 +149,6 @@ class GPT2Model:
         self.layers: list[GPT2Layer] = []
         self.memory_k = None
         self.memory_v = None
-        self.ctx_w = None
-        self.ctx_kv = None
-        self.buffer_w = None
-        self.buffer_kv = None
         self.tensors: dict[str, object] = {}
 
 
@@ -163,7 +157,7 @@ class GPT2Model:
 # ============================================================================
 
 def gpt2_model_load(
-    fname: str, model: GPT2Model, backend: Backend, n_ctx: int, n_gpu_layers: int
+    fname: str, model: GPT2Model, session: ggbond.Session, n_ctx: int, n_gpu_layers: int
 ) -> tuple[dict[str, int], dict[int, str]]:
     """Load GPT-2 model from binary file. Returns (token_to_id, id_to_token)."""
     print(f"gpt2_model_load: loading model from '{fname}'")
@@ -210,8 +204,7 @@ def gpt2_model_load(
         wtype = ggml.Type(ggml.ftype_to_ggml_type(hp.ftype))
 
         n_tensors = 2 + 6 + 12 * hp.n_layer
-        ctx_w = Context(n_tensors=n_tensors)
-        model.ctx_w = ctx_w
+        ctx_w = session.context(n_tensors=n_tensors)
 
         n_embd = hp.n_embd
         n_layer = hp.n_layer
@@ -264,17 +257,16 @@ def gpt2_model_load(
             model.tensors[f"{prefix}/mlp/c_proj/w"] = layer.c_mlp_proj_w
             model.tensors[f"{prefix}/mlp/c_proj/b"] = layer.c_mlp_proj_b
 
-        model.buffer_w = backend.alloc_ctx(ctx_w)
+        buffer_w = session.alloc(ctx_w)
 
         print(
             f"gpt2_model_load: backend buffer size = "
-            f"{ggml.backend_buffer_get_size(model.buffer_w) / 1024 / 1024:.2f} MB"
+            f"{ggml.backend_buffer_get_size(buffer_w) / 1024 / 1024:.2f} MB"
         )
 
         model.hparams.n_ctx = n_ctx
 
-        ctx_kv = Context(n_tensors=2)
-        model.ctx_kv = ctx_kv
+        ctx_kv = session.context(n_tensors=2)
 
         n_mem = n_layer * n_ctx
         n_elements = n_embd * n_mem
@@ -282,9 +274,9 @@ def gpt2_model_load(
         model.memory_k = ctx_kv.new_tensor(ggml.Type.F32, n_elements)
         model.memory_v = ctx_kv.new_tensor(ggml.Type.F32, n_elements)
 
-        model.buffer_kv = backend.alloc_ctx(ctx_kv)
+        buffer_kv = session.alloc(ctx_kv)
 
-        memory_size = ggml.backend_buffer_get_size(model.buffer_kv)
+        memory_size = ggml.backend_buffer_get_size(buffer_kv)
         print(
             f"gpt2_model_load: memory size = {memory_size / 1024 / 1024:.2f} MB, "
             f"n_mem = {n_mem}"
@@ -468,7 +460,7 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
 
 def gpt2_eval(
     model: GPT2Model,
-    runner: GraphRunner,
+    session: ggbond.Session,
     n_threads: int,
     n_past: int,
     embd_inp: list[int],
@@ -479,13 +471,13 @@ def gpt2_eval(
 
     gf, graph_ctx = gpt2_graph(model, n_past, N)
 
-    runner.compute(gf, inputs={
+    session.runner.compute(gf, inputs={
         "embd": np.array(embd_inp, dtype=np.int32),
         "position": np.arange(n_past, n_past + N, dtype=np.int32),
     })
 
-    logits = runner.get_slice(gf, "logits",
-                              offset=n_vocab * (N - 1) * 4, count=n_vocab)
+    logits = session.get_slice(gf, "logits",
+                               offset=n_vocab * (N - 1) * 4, count=n_vocab)
 
     graph_ctx.close()
     return logits
@@ -496,7 +488,7 @@ def gpt2_eval(
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="GPT-2 inference with ggbond OOP API")
+    parser = argparse.ArgumentParser(description="GPT-2 inference with ggbond Session API")
     parser.add_argument(
         "-m", "--model", type=str,
         default="models/gpt-2-117M/ggml-model.bin",
@@ -524,78 +516,77 @@ def main():
     t_start_us = ggml.time_us()
     model = GPT2Model()
 
-    with Backend("cpu", n_threads=args.threads) as backend:
+    with ggbond.Session("cpu", n_threads=args.threads) as s:
         token_to_id, id_to_token = gpt2_model_load(
-            args.model, model, backend, args.n_ctx, args.n_gpu_layers
+            args.model, model, s, args.n_ctx, args.n_gpu_layers
         )
         t_load_us = ggml.time_us() - t_start_us
 
-        with GraphRunner(backend) as runner:
-            # Reserve memory for worst case
-            n_tokens = min(model.hparams.n_ctx, args.n_batch)
-            n_past_worst = model.hparams.n_ctx - n_tokens
-            gf_worst, ctx_worst = gpt2_graph(model, n_past_worst, n_tokens)
-            runner.reserve(gf_worst)
-            ctx_worst.close()
+        # Reserve memory for worst case
+        n_tokens = min(model.hparams.n_ctx, args.n_batch)
+        n_past_worst = model.hparams.n_ctx - n_tokens
+        gf_worst, ctx_worst = gpt2_graph(model, n_past_worst, n_tokens)
+        s.reserve(gf_worst)
+        ctx_worst.close()
 
-            mem_size = runner.buffer_size
-            print(
-                f"main: compute buffer size: {mem_size / 1024 / 1024:.2f} MB",
-                file=sys.stderr,
-            )
+        mem_size = s.runner.buffer_size
+        print(
+            f"main: compute buffer size: {mem_size / 1024 / 1024:.2f} MB",
+            file=sys.stderr,
+        )
 
-            # Tokenize prompt
-            embd_inp = gpt_tokenize(token_to_id, args.prompt)
-            n_predict = min(args.n_predict, model.hparams.n_ctx - len(embd_inp))
+        # Tokenize prompt
+        embd_inp = gpt_tokenize(token_to_id, args.prompt)
+        n_predict = min(args.n_predict, model.hparams.n_ctx - len(embd_inp))
 
-            print(f"main: prompt: '{args.prompt}'")
-            print(
-                f"main: number of tokens in prompt = {len(embd_inp)}, "
-                f"first 8 tokens: {embd_inp[:8]}"
-            )
-            print()
+        print(f"main: prompt: '{args.prompt}'")
+        print(
+            f"main: number of tokens in prompt = {len(embd_inp)}, "
+            f"first 8 tokens: {embd_inp[:8]}"
+        )
+        print()
 
-            n_past = 0
-            t_sample_us = 0
-            t_predict_us = 0
+        n_past = 0
+        t_sample_us = 0
+        t_predict_us = 0
 
-            logits = None
-            embd: list[int] = []
+        logits = None
+        embd: list[int] = []
 
-            i = 0
-            while i < len(embd_inp) + n_predict:
-                if len(embd) > 0:
-                    t_start = ggml.time_us()
-                    logits = gpt2_eval(
-                        model, runner, args.threads, n_past, embd
-                    )
-                    t_predict_us += ggml.time_us() - t_start
+        i = 0
+        while i < len(embd_inp) + n_predict:
+            if len(embd) > 0:
+                t_start = ggml.time_us()
+                logits = gpt2_eval(
+                    model, s, args.threads, n_past, embd
+                )
+                t_predict_us += ggml.time_us() - t_start
 
-                n_past += len(embd)
-                embd.clear()
+            n_past += len(embd)
+            embd.clear()
 
-                if i >= len(embd_inp):
-                    t_start_sample = ggml.time_us()
-                    token_id = gpt_sample_top_k_top_p(
-                        logits, args.top_k, args.top_p, args.temp, rng
-                    )
-                    t_sample_us += ggml.time_us() - t_start_sample
-                    embd.append(token_id)
-                else:
-                    while i < len(embd_inp):
-                        embd.append(embd_inp[i])
-                        i += 1
-                        if len(embd) >= args.n_batch:
-                            break
-                    i -= 1
+            if i >= len(embd_inp):
+                t_start_sample = ggml.time_us()
+                token_id = gpt_sample_top_k_top_p(
+                    logits, args.top_k, args.top_p, args.temp, rng
+                )
+                t_sample_us += ggml.time_us() - t_start_sample
+                embd.append(token_id)
+            else:
+                while i < len(embd_inp):
+                    embd.append(embd_inp[i])
+                    i += 1
+                    if len(embd) >= args.n_batch:
+                        break
+                i -= 1
 
-                for token_id in embd:
-                    print(id_to_token.get(token_id, ""), end="", flush=True)
+            for token_id in embd:
+                print(id_to_token.get(token_id, ""), end="", flush=True)
 
-                if embd[-1] == 50256:
-                    break
+            if embd[-1] == 50256:
+                break
 
-                i += 1
+            i += 1
 
         # Report timing
         t_main_end_us = ggml.time_us()
@@ -607,12 +598,6 @@ def main():
             f" / {t_predict_us / 1000 / max(n_past, 1):.2f} ms per token"
         )
         print(f"main:    total time = {(t_main_end_us - t_main_start_us) / 1000:.2f} ms")
-
-        # Cleanup model resources
-        model.ctx_w.close()
-        model.ctx_kv.close()
-        ggml.backend_buffer_free(model.buffer_w)
-        ggml.backend_buffer_free(model.buffer_kv)
 
 
 if __name__ == "__main__":
