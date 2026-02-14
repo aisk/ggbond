@@ -506,6 +506,7 @@ def main():
     args = parser.parse_args()
 
     ggml.time_init()
+    ggml.log_set_default()
     t_main_start_us = ggml.time_us()
 
     seed = args.seed if args.seed >= 0 else random.randint(0, 2**31)
