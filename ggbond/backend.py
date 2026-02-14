@@ -69,6 +69,9 @@ class Backend:
 
     # -- lifecycle ------------------------------------------------------------
 
+    def __del__(self) -> None:
+        self.close()
+
     def close(self) -> None:
         """Free the backend.  Safe to call multiple times."""
         if self._backend:

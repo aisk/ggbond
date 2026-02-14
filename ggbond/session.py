@@ -11,19 +11,7 @@ from ggbond.graph import GraphRunner, load_gguf as _load_gguf
 
 
 class Session:
-    """Single entry-point that owns a backend, tracks all resources, and cleans up on exit.
-
-    Usage::
-
-        with Session("cpu") as s:
-            ctx = s.context(n_tensors=2)
-            t = ctx.new_tensor(ggml.Type.F32, 4, 4)
-            s.alloc(ctx)
-            s.set(t, data)
-            ...
-            s.run(graph)
-            out = s.get(graph, t)
-    """
+    """Single entry-point that owns a backend, tracks all resources, and cleans up on exit."""
 
     def __init__(self, backend: str = "cpu", *, n_threads: int = 4):
         self._backend = Backend(backend, n_threads=n_threads)
@@ -120,6 +108,9 @@ class Session:
         return wrapper, tensors
 
     # -- lifecycle ------------------------------------------------------------
+
+    def __del__(self) -> None:
+        self.close()
 
     def close(self) -> None:
         """Release all resources in reverse order. Safe to call multiple times."""
