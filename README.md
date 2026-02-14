@@ -20,52 +20,37 @@ pip install -e .
 
 ```python
 import numpy as np
+import ggbond
 from ggbond import ggml
 
-# Phase 1: Define tensor metadata and build computation graph
-ctx_model = ggml.context_init(ggml.tensor_overhead() * 2, no_alloc=True)
-ctx_graph = ggml.context_init(
-    ggml.tensor_overhead() * ggml.DEFAULT_GRAPH_SIZE() + ggml.graph_overhead(),
-    no_alloc=True,
-)
-
-a = ggml.new_tensor_2d(ctx_model, ggml.Type.F32, 2, 4)
-b = ggml.new_tensor_2d(ctx_model, ggml.Type.F32, 2, 3)
-
-graph = ggml.new_graph(ctx_graph)
-result = ggml.mul_mat(ctx_graph, a, b)
-ggml.build_forward_expand(graph, result)
-
-# Phase 2: Allocate memory on backend
-backend = ggml.backend_cpu_init()
-buffer = ggml.backend_alloc_ctx_tensors(ctx_model, backend)
-allocr = ggml.gallocr_new(ggml.backend_get_default_buffer_type(backend))
-ggml.gallocr_reserve(allocr, graph)
-ggml.gallocr_alloc_graph(allocr, graph)
-
-# Phase 3: Set data, compute, and get result
 matrix_a = np.array([[2, 8], [5, 1], [4, 2], [8, 6]], dtype=np.float32)
 matrix_b = np.array([[10, 5], [9, 9], [5, 4]], dtype=np.float32)
-ggml.backend_tensor_set(a, matrix_a.flatten(), 0, ggml.nbytes(a))
-ggml.backend_tensor_set(b, matrix_b.flatten(), 0, ggml.nbytes(b))
+rows_a, cols_a = matrix_a.shape
+rows_b, cols_b = matrix_b.shape
 
-ggml.backend_graph_compute(backend, graph)
+with ggbond.Session("cpu") as s:
+    ctx_model = s.context(n_tensors=2)
+    a = ctx_model.new_tensor(ggml.Type.F32, cols_a, rows_a)
+    b = ctx_model.new_tensor(ggml.Type.F32, cols_b, rows_b)
+    s.alloc(ctx_model)
+    s.set(a, matrix_a)
+    s.set(b, matrix_b)
 
-out = np.empty(ggml.nelements(result), dtype=np.float32)
-ggml.backend_tensor_get(result, out, 0, ggml.nbytes(result))
-print(out.reshape(ggml.tensor_ne(result, 1), ggml.tensor_ne(result, 0)))
+    ctx_graph = s.graph_context()
+    result = ggml.mul_mat(ctx_graph.raw, a, b)
+    graph = ctx_graph.new_graph()
+    ggml.build_forward_expand(graph, result)
 
-# Cleanup
-ggml.gallocr_free(allocr)
-ggml.context_free(ctx_model)
-ggml.backend_buffer_free(buffer)
-ggml.backend_free(backend)
-ggml.context_free(ctx_graph)
+    s.reserve(graph)
+    s.run(graph)
+    print(s.get(graph, result).reshape(3, 4))
 ```
 
 ## Examples
 
-See `examples/simple_backend.py` for a complete working example.
+- [`examples/simple.py`](examples/simple.py) — Matrix multiplication
+- [`examples/magika.py`](examples/magika.py) — File type detection with Magika
+- [`examples/gpt2.py`](examples/gpt2.py) — GPT-2 text generation
 
 ## License
 
