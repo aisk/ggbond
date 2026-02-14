@@ -443,4 +443,8 @@ PYBIND11_MODULE(ggml, m) {
     m.def("gguf_get_tensor_offset", [](GGUFContextPtr ctx, int64_t tensor_id) {
         return gguf_get_tensor_offset(static_cast<const struct gguf_context*>(ctx.ptr), tensor_id);
     }, "Get tensor offset in GGUF file", py::arg("ctx"), py::arg("tensor_id"));
+
+    m.def("gguf_get_tensor_name", [](GGUFContextPtr ctx, int64_t tensor_id) {
+        return gguf_get_tensor_name(static_cast<const struct gguf_context*>(ctx.ptr), tensor_id);
+    }, "Get tensor name by index", py::arg("ctx"), py::arg("tensor_id"));
 }

@@ -429,6 +429,10 @@ def gguf_get_tensor_offset(ctx: GGUFContext, tensor_id: int) -> int:
     """Get tensor offset in GGUF file"""
     ...
 
+def gguf_get_tensor_name(ctx: GGUFContext, tensor_id: int) -> str:
+    """Get tensor name by index"""
+    ...
+
 # Time utilities
 def time_init() -> None:
     """Initialize time measurement - call this once at the beginning of the program"""
