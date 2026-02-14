@@ -129,6 +129,8 @@ PYBIND11_MODULE(ggml, m) {
         return ggml_graph_overhead_custom(size, grads);
     }, "Get memory overhead for custom graph size", py::arg("size"), py::arg("grads"));
     m.def("DEFAULT_GRAPH_SIZE", []() { return GGML_DEFAULT_GRAPH_SIZE; }, "Default graph size constant");
+    m.attr("FILE_MAGIC") = GGML_FILE_MAGIC;
+    m.attr("QNT_VERSION_FACTOR") = GGML_QNT_VERSION_FACTOR;
     m.def("context_init", [](size_t mem_size, void* mem_buffer = nullptr, bool no_alloc = false) {
         ggml_init_params params = {mem_size, mem_buffer, no_alloc};
         return ContextPtr(ggml_init(params));
@@ -147,6 +149,9 @@ PYBIND11_MODULE(ggml, m) {
     }, "Create a new 4D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"));
     m.def("type_size", &ggml_type_size, "Get size in bytes for all elements in a block of the given type", py::arg("type"));
     m.def("blck_size", &ggml_blck_size, "Get block size (number of elements per block) for the given type", py::arg("type"));
+    m.def("type_name", [](int type) {
+        return std::string(ggml_type_name(static_cast<ggml_type>(type)));
+    }, "Get type name string", py::arg("type"));
     m.def("ftype_to_ggml_type", [](int ftype) {
         return static_cast<int>(ggml_ftype_to_ggml_type(static_cast<ggml_ftype>(ftype)));
     }, "Convert file type to tensor type", py::arg("ftype"));
@@ -159,6 +164,9 @@ PYBIND11_MODULE(ggml, m) {
     m.def("backend_buffer_is_host", [](BufferPtr buffer) {
         return ggml_backend_buffer_is_host(static_cast<ggml_backend_buffer_t>(buffer.ptr));
     }, "Check if buffer is in host memory", py::arg("buffer"));
+    m.def("backend_buffer_get_size", [](BufferPtr buffer) {
+        return ggml_backend_buffer_get_size(static_cast<ggml_backend_buffer_t>(buffer.ptr));
+    }, "Get buffer size in bytes", py::arg("buffer"));
     m.def("backend_tensor_set", [](TensorPtr tensor, py::buffer data, size_t offset, size_t size) {
         py::buffer_info info = data.request();
         size_t data_size = info.itemsize * info.size;
@@ -362,6 +370,10 @@ PYBIND11_MODULE(ggml, m) {
     m.def("time_init", []() {
         ggml_time_init();
     }, "Initialize time measurement - call this once at the beginning of the program");
+
+    m.def("time_us", []() {
+        return ggml_time_us();
+    }, "Get current time in microseconds");
 
     // Graph allocator functions
     m.def("gallocr_new", [](BufferTypePtr buffer_type) {
