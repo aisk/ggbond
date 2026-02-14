@@ -156,6 +156,10 @@ def backend_buffer_free(buffer: Buffer) -> None:
     """Free backend buffer"""
     ...
 
+def backend_buffer_is_host(buffer: Buffer) -> bool:
+    """Check if buffer is in host memory"""
+    ...
+
 def backend_free(backend: Backend) -> None:
     """Free backend"""
     ...
@@ -179,6 +183,10 @@ def graph_overhead() -> int:
     """Get the memory overhead of a graph"""
     ...
 
+def graph_overhead_custom(size: int, grads: bool) -> int:
+    """Get memory overhead for custom graph size"""
+    ...
+
 def DEFAULT_GRAPH_SIZE() -> int:
     """Default graph size constant"""
     ...
@@ -189,6 +197,10 @@ def type_size(type: int) -> int:
 
 def blck_size(type: int) -> int:
     """Get block size (number of elements per block) for the given type"""
+    ...
+
+def ftype_to_ggml_type(ftype: int) -> int:
+    """Convert file type to tensor type"""
     ...
 
 # Tensor operations
