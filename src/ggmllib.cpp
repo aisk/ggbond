@@ -253,6 +253,18 @@ PYBIND11_MODULE(ggml, m) {
         return TensorPtr(ggml_exp(as<ggml_context>(ctx), as<ggml_tensor>(a)));
     }, "Element-wise exponential: result = exp(a)", py::arg("ctx"), py::arg("a"));
 
+    m.def("sin", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_sin(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Element-wise sine", py::arg("ctx"), py::arg("a"));
+
+    m.def("cos", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_cos(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Element-wise cosine", py::arg("ctx"), py::arg("a"));
+
+    m.def("sgn", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_sgn(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Element-wise sign function", py::arg("ctx"), py::arg("a"));
+
     m.def("tanh", [](ContextPtr ctx, TensorPtr a) {
         return TensorPtr(ggml_tanh(as<ggml_context>(ctx), as<ggml_tensor>(a)));
     }, "Element-wise hyperbolic tangent: result = tanh(a)", py::arg("ctx"), py::arg("a"));
@@ -269,25 +281,73 @@ PYBIND11_MODULE(ggml, m) {
         return TensorPtr(ggml_gelu(as<ggml_context>(ctx), as<ggml_tensor>(a)));
     }, "Element-wise GELU activation (Gaussian Error Linear Unit)", py::arg("ctx"), py::arg("a"));
 
+    m.def("silu", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_silu(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "SiLU activation (x * sigmoid(x))", py::arg("ctx"), py::arg("a"));
+
+    m.def("leaky_relu", [](ContextPtr ctx, TensorPtr a, float negative_slope, bool inplace) {
+        return TensorPtr(ggml_leaky_relu(as<ggml_context>(ctx), as<ggml_tensor>(a), negative_slope, inplace));
+    }, "Leaky ReLU activation", py::arg("ctx"), py::arg("a"), py::arg("negative_slope"), py::arg("inplace"));
+
+    m.def("gelu_quick", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_gelu_quick(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Fast GELU approximation", py::arg("ctx"), py::arg("a"));
+
+    m.def("hardswish", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_hardswish(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Hard swish activation", py::arg("ctx"), py::arg("a"));
+
+    m.def("hardsigmoid", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_hardsigmoid(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Hard sigmoid activation", py::arg("ctx"), py::arg("a"));
+
+    m.def("elu", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_elu(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "ELU activation", py::arg("ctx"), py::arg("a"));
+
     // Reduction operations
     m.def("sum", [](ContextPtr ctx, TensorPtr a) {
         return TensorPtr(ggml_sum(as<ggml_context>(ctx), as<ggml_tensor>(a)));
     }, "Sum all elements in tensor, returns scalar", py::arg("ctx"), py::arg("a"));
 
+    m.def("sum_rows", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_sum_rows(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Sum elements along rows", py::arg("ctx"), py::arg("a"));
+
     m.def("mean", [](ContextPtr ctx, TensorPtr a) {
         return TensorPtr(ggml_mean(as<ggml_context>(ctx), as<ggml_tensor>(a)));
     }, "Mean of all elements along rows", py::arg("ctx"), py::arg("a"));
+
+    m.def("argmax", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_argmax(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Argmax along rows", py::arg("ctx"), py::arg("a"));
 
     // Normalization and activation
     m.def("norm", [](ContextPtr ctx, TensorPtr a, float eps) {
         return TensorPtr(ggml_norm(as<ggml_context>(ctx), as<ggml_tensor>(a), eps));
     }, "Normalize tensor along rows", py::arg("ctx"), py::arg("a"), py::arg("eps"));
 
+    m.def("rms_norm", [](ContextPtr ctx, TensorPtr a, float eps) {
+        return TensorPtr(ggml_rms_norm(as<ggml_context>(ctx), as<ggml_tensor>(a), eps));
+    }, "RMS normalization", py::arg("ctx"), py::arg("a"), py::arg("eps"));
+
+    m.def("group_norm", [](ContextPtr ctx, TensorPtr a, int n_groups, float eps) {
+        return TensorPtr(ggml_group_norm(as<ggml_context>(ctx), as<ggml_tensor>(a), n_groups, eps));
+    }, "Group normalization", py::arg("ctx"), py::arg("a"), py::arg("n_groups"), py::arg("eps"));
+
+    m.def("l2_norm", [](ContextPtr ctx, TensorPtr a, float eps) {
+        return TensorPtr(ggml_l2_norm(as<ggml_context>(ctx), as<ggml_tensor>(a), eps));
+    }, "L2 normalization", py::arg("ctx"), py::arg("a"), py::arg("eps"));
+
     m.def("soft_max", [](ContextPtr ctx, TensorPtr a) {
         return TensorPtr(ggml_soft_max(as<ggml_context>(ctx), as<ggml_tensor>(a)));
     }, "Apply softmax activation", py::arg("ctx"), py::arg("a"));
 
     // Reshape operations
+    m.def("reshape_1d", [](ContextPtr ctx, TensorPtr a, int64_t ne0) {
+        return TensorPtr(ggml_reshape_1d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0));
+    }, "Reshape tensor to 1D", py::arg("ctx"), py::arg("a"), py::arg("ne0"));
+
     m.def("reshape_2d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1) {
         return TensorPtr(ggml_reshape_2d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1));
     }, "Reshape tensor to 2D", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"));
@@ -295,6 +355,10 @@ PYBIND11_MODULE(ggml, m) {
     m.def("reshape_3d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2) {
         return TensorPtr(ggml_reshape_3d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2));
     }, "Reshape tensor to 3D", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"));
+
+    m.def("reshape_4d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
+        return TensorPtr(ggml_reshape_4d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2, ne3));
+    }, "Reshape tensor to 4D", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"));
 
     // Transpose and contiguous
     m.def("transpose", [](ContextPtr ctx, TensorPtr a) {
@@ -309,9 +373,17 @@ PYBIND11_MODULE(ggml, m) {
         return TensorPtr(ggml_cont_2d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1));
     }, "Make tensor contiguous with 2D shape", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"));
 
+    m.def("cont_1d", [](ContextPtr ctx, TensorPtr a, int64_t ne0) {
+        return TensorPtr(ggml_cont_1d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0));
+    }, "Make tensor contiguous with 1D shape", py::arg("ctx"), py::arg("a"), py::arg("ne0"));
+
     m.def("cont_3d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2) {
         return TensorPtr(ggml_cont_3d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2));
     }, "Make tensor contiguous with 3D shape", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"));
+
+    m.def("cont_4d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
+        return TensorPtr(ggml_cont_4d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2, ne3));
+    }, "Make tensor contiguous with 4D shape", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"));
 
     // View operations (for KV cache and Q/K/V split)
     m.def("view_1d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, size_t offset) {
@@ -321,6 +393,14 @@ PYBIND11_MODULE(ggml, m) {
     m.def("view_2d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, size_t nb1, size_t offset) {
         return TensorPtr(ggml_view_2d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, nb1, offset));
     }, "Create 2D view of tensor", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("nb1"), py::arg("offset"));
+
+    m.def("view_3d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2, size_t nb1, size_t nb2, size_t offset) {
+        return TensorPtr(ggml_view_3d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2, nb1, nb2, offset));
+    }, "Create 3D view of tensor", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("nb1"), py::arg("nb2"), py::arg("offset"));
+
+    m.def("view_4d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, size_t nb1, size_t nb2, size_t nb3, size_t offset) {
+        return TensorPtr(ggml_view_4d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2, ne3, nb1, nb2, nb3, offset));
+    }, "Create 4D view of tensor", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"), py::arg("nb1"), py::arg("nb2"), py::arg("nb3"), py::arg("offset"));
 
     // Embedding lookup
     m.def("get_rows", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
@@ -336,6 +416,14 @@ PYBIND11_MODULE(ggml, m) {
     m.def("scale", [](ContextPtr ctx, TensorPtr a, float s) {
         return TensorPtr(ggml_scale(as<ggml_context>(ctx), as<ggml_tensor>(a), s));
     }, "Scale tensor by scalar", py::arg("ctx"), py::arg("a"), py::arg("s"));
+
+    m.def("clamp", [](ContextPtr ctx, TensorPtr a, float min, float max) {
+        return TensorPtr(ggml_clamp(as<ggml_context>(ctx), as<ggml_tensor>(a), min, max));
+    }, "Clamp tensor values to [min, max]", py::arg("ctx"), py::arg("a"), py::arg("min"), py::arg("max"));
+
+    m.def("repeat", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_repeat(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "Repeat tensor a to match shape of b", py::arg("ctx"), py::arg("a"), py::arg("b"));
 
     // Diagonal mask (for causal attention)
     m.def("diag_mask_inf", [](ContextPtr ctx, TensorPtr a, int n_past) {
@@ -458,6 +546,38 @@ PYBIND11_MODULE(ggml, m) {
     m.def("nelements", [](TensorPtr tensor) {
         return ggml_nelements(as<ggml_tensor>(tensor));
     }, "Get number of elements in tensor", py::arg("tensor"));
+
+    m.def("n_dims", [](TensorPtr tensor) {
+        return ggml_n_dims(as<ggml_tensor>(tensor));
+    }, "Get number of dimensions", py::arg("tensor"));
+
+    m.def("nrows", [](TensorPtr tensor) {
+        return ggml_nrows(as<ggml_tensor>(tensor));
+    }, "Get number of rows", py::arg("tensor"));
+
+    m.def("get_name", [](TensorPtr tensor) {
+        return std::string(ggml_get_name(as<ggml_tensor>(tensor)));
+    }, "Get tensor name", py::arg("tensor"));
+
+    m.def("is_contiguous", [](TensorPtr tensor) {
+        return ggml_is_contiguous(as<ggml_tensor>(tensor));
+    }, "Check if tensor is contiguous", py::arg("tensor"));
+
+    m.def("is_transposed", [](TensorPtr tensor) {
+        return ggml_is_transposed(as<ggml_tensor>(tensor));
+    }, "Check if tensor is transposed", py::arg("tensor"));
+
+    m.def("is_permuted", [](TensorPtr tensor) {
+        return ggml_is_permuted(as<ggml_tensor>(tensor));
+    }, "Check if tensor is permuted", py::arg("tensor"));
+
+    m.def("is_quantized", [](ggml_type type) {
+        return ggml_is_quantized(type);
+    }, "Check if type is quantized", py::arg("type"));
+
+    m.def("are_same_shape", [](TensorPtr a, TensorPtr b) {
+        return ggml_are_same_shape(as<ggml_tensor>(a), as<ggml_tensor>(b));
+    }, "Check if two tensors have the same shape", py::arg("a"), py::arg("b"));
 
     // Graph input/output marking
     m.def("set_input", [](TensorPtr tensor) {
