@@ -479,7 +479,6 @@ def gpt2_eval(
     logits = session.get_slice(gf, "logits",
                                offset=n_vocab * (N - 1) * 4, count=n_vocab)
 
-    graph_ctx.close()
     return logits
 
 
@@ -527,7 +526,7 @@ def main():
         n_past_worst = model.hparams.n_ctx - n_tokens
         gf_worst, ctx_worst = gpt2_graph(model, n_past_worst, n_tokens)
         s.reserve(gf_worst)
-        ctx_worst.close()
+        del ctx_worst
 
         mem_size = s.runner.buffer_size
         print(

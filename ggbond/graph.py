@@ -77,6 +77,9 @@ class GraphRunner:
 
     # -- lifecycle ------------------------------------------------------------
 
+    def __del__(self) -> None:
+        self.close()
+
     def close(self) -> None:
         """Free the graph allocator.  Safe to call multiple times."""
         if self._allocr:

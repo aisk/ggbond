@@ -164,8 +164,6 @@ def main():
             ]
             print(f"{fpath:<30s}: {' '.join(parts)}")
 
-        ctx_graph.close()
-
 
 if __name__ == "__main__":
     main()
