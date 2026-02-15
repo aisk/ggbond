@@ -28,6 +28,7 @@ from ggbond.backend import Backend
 from ggbond.context import Context
 from ggbond.graph import GraphRunner, load_gguf
 from ggbond.session import Session
+from ggbond.tensor import Tensor
 
 __version__ = "0.1.0"
-__all__ = ["ggml", "Backend", "Context", "GraphRunner", "load_gguf", "Session"]
+__all__ = ["ggml", "Backend", "Context", "GraphRunner", "load_gguf", "Session", "Tensor"]
