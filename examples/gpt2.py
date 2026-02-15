@@ -465,7 +465,7 @@ def gpt2_eval(
 
     g = gpt2_graph(model, n_past, N)
 
-    session.runner.compute(g.raw, inputs={
+    session.run(g, inputs={
         "embd": np.array(embd_inp, dtype=np.int32),
         "position": np.arange(n_past, n_past + N, dtype=np.int32),
     })
@@ -522,7 +522,7 @@ def main():
         g_worst = gpt2_graph(model, n_past_worst, n_tokens)
         s.reserve(g_worst)
 
-        mem_size = s.runner.buffer_size
+        mem_size = s.buffer_size
         print(
             f"main: compute buffer size: {mem_size / 1024 / 1024:.2f} MB",
             file=sys.stderr,

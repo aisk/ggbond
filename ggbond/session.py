@@ -7,7 +7,7 @@ import numpy as np
 from ggbond import ggml
 from ggbond.backend import Backend
 from ggbond.context import Context
-from ggbond.graph import Graph, GraphRunner, load_gguf as _load_gguf
+from ggbond.graph import GAllocr, Graph, load_gguf as _load_gguf
 
 
 class Session:
@@ -15,7 +15,7 @@ class Session:
 
     def __init__(self, backend: str = "cpu", *, n_threads: int = 4):
         self._backend = Backend(backend, n_threads=n_threads)
-        self._runner = GraphRunner(self._backend)
+        self._allocr = GAllocr(self._backend)
         self._contexts: list[Context] = []
         self._buffers: list[ggml.Buffer] = []
         self._reserved = False
@@ -28,9 +28,9 @@ class Session:
         return self._backend
 
     @property
-    def runner(self) -> GraphRunner:
-        """Underlying :class:`GraphRunner` for direct access."""
-        return self._runner
+    def buffer_size(self) -> int:
+        """Current graph allocator buffer size (call after :meth:`reserve`)."""
+        return self._allocr.buffer_size
 
     # -- context creation -----------------------------------------------------
 
@@ -68,33 +68,54 @@ class Session:
         self._backend.tensor_set(tensor, data)
 
     def get(self, graph: ggml.Graph | Graph, tensor_or_name, dtype=np.float32) -> np.ndarray:
-        """Read full tensor data from the graph."""
-        return self._runner.get(self._raw(graph), tensor_or_name, dtype=dtype)
+        """Read full tensor data from the graph.
+
+        *tensor_or_name* can be a ``ggml.Tensor`` object or a string name.
+        """
+        raw = self._raw(graph)
+        tensor = (
+            ggml.graph_get_tensor(raw, tensor_or_name)
+            if isinstance(tensor_or_name, str)
+            else tensor_or_name
+        )
+        out = np.empty(ggml.nelements(tensor), dtype=dtype)
+        ggml.backend_tensor_get(tensor, out, 0, ggml.nbytes(tensor))
+        return out
 
     def get_slice(
         self, graph: ggml.Graph | Graph, name: str, offset: int, count: int, dtype=np.float32
     ) -> np.ndarray:
         """Read *count* elements from tensor *name* starting at byte *offset*."""
-        return self._runner.get_slice(self._raw(graph), name, offset, count, dtype=dtype)
+        raw = self._raw(graph)
+        tensor = ggml.graph_get_tensor(raw, name)
+        out = np.empty(count, dtype=dtype)
+        ggml.backend_tensor_get(tensor, out, offset, count * out.itemsize)
+        return out
 
     # -- graph execution ------------------------------------------------------
 
     def reserve(self, graph: ggml.Graph | Graph) -> int:
         """Explicitly reserve memory for *graph*. Returns buffer size in bytes."""
-        size = self._runner.reserve(self._raw(graph))
+        size = self._allocr.reserve(self._raw(graph))
         self._reserved = True
         return size
 
     def run(self, graph: ggml.Graph | Graph, inputs: dict[str, np.ndarray] | None = None) -> None:
-        """Reserve (if needed) and compute *graph*.
+        """Reserve (if needed), allocate, set inputs, and compute *graph*.
 
-        On first call, automatically reserves memory.  Subsequent calls only compute.
+        On first call, automatically reserves memory.  Subsequent calls only allocate and compute.
         """
         raw = self._raw(graph)
         if not self._reserved:
-            self._runner.reserve(raw)
+            self._allocr.reserve(raw)
             self._reserved = True
-        self._runner.compute(raw, inputs=inputs)
+        self._allocr.alloc(raw)
+        if inputs:
+            for name, data in inputs.items():
+                tensor = ggml.graph_get_tensor(raw, name)
+                flat = data.flatten() if data.ndim > 1 else data
+                ggml.backend_tensor_set(tensor, flat, 0, ggml.nbytes(tensor))
+        self._backend.compute(raw)
 
     @staticmethod
     def _raw(graph: ggml.Graph | Graph) -> ggml.Graph:
@@ -123,10 +144,10 @@ class Session:
 
     def close(self) -> None:
         """Release all resources in reverse order. Safe to call multiple times."""
-        # 1. GraphRunner
-        if self._runner:
-            self._runner.close()
-            self._runner = None
+        # 1. GAllocr
+        if self._allocr:
+            self._allocr.close()
+            self._allocr = None
 
         # 2. Contexts (reverse order)
         for ctx in reversed(self._contexts):
