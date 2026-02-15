@@ -23,7 +23,6 @@ import numpy as np
 
 import ggbond
 from ggbond import ggml
-from ggbond.context import Context
 
 GPT2_MAX_NODES = 4096
 
@@ -334,61 +333,57 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
     n_ctx = hp.n_ctx
     n_head = hp.n_head
 
-    ctx = Context.for_graph(max_nodes=GPT2_MAX_NODES, grads=False)
+    g = ggbond.Graph(max_nodes=GPT2_MAX_NODES)
 
-    gf = ctx.new_graph(max_nodes=GPT2_MAX_NODES, grads=False)
-
-    embd = ctx.new_tensor(ggml.Type.I32, N, name="embd")
+    embd = g.new_tensor(ggml.Type.I32, N, name="embd")
     ggml.set_input(embd)
 
-    position = ctx.new_tensor(ggml.Type.I32, N, name="position")
+    position = g.new_tensor(ggml.Type.I32, N, name="position")
     ggml.set_input(position)
 
     # wte + wpe
-    inpL = ggml.add(
-        ctx.raw,
-        ggml.get_rows(ctx.raw, model.wte, embd),
-        ggml.get_rows(ctx.raw, model.wpe, position),
+    inpL = g.add(
+        ggml.get_rows(g.ctx, model.wte, embd),
+        ggml.get_rows(g.ctx, model.wpe, position),
     )
 
     for il in range(n_layer):
         layer = model.layers[il]
 
-        cur = ggml.norm(ctx.raw, inpL, hp.eps)
-        cur = ggml.add(ctx.raw, ggml.mul(ctx.raw, cur, layer.ln_1_g), layer.ln_1_b)
+        cur = g.norm(inpL, hp.eps)
+        cur = g.add(g.mul(cur, layer.ln_1_g), layer.ln_1_b)
 
-        cur = ggml.mul_mat(ctx.raw, layer.c_attn_attn_w, cur)
-        cur = ggml.add(ctx.raw, cur, layer.c_attn_attn_b)
+        cur = g.mul_mat(layer.c_attn_attn_w, cur)
+        cur = g.add(cur, layer.c_attn_attn_b)
 
         nb1 = ggml.tensor_nb(cur, 1)
-        Qcur = ggml.view_2d(ctx.raw, cur, n_embd, N, nb1, 0 * 4 * n_embd)
-        Kcur = ggml.view_2d(ctx.raw, cur, n_embd, N, nb1, 1 * 4 * n_embd)
-        Vcur = ggml.view_2d(ctx.raw, cur, n_embd, N, nb1, 2 * 4 * n_embd)
+        Qcur = ggml.view_2d(g.ctx, cur, n_embd, N, nb1, 0 * 4 * n_embd)
+        Kcur = ggml.view_2d(g.ctx, cur, n_embd, N, nb1, 1 * 4 * n_embd)
+        Vcur = ggml.view_2d(g.ctx, cur, n_embd, N, nb1, 2 * 4 * n_embd)
 
         if N >= 1:
             k = ggml.view_1d(
-                ctx.raw, model.memory_k, N * n_embd,
+                g.ctx, model.memory_k, N * n_embd,
                 ggml.element_size(model.memory_k) * n_embd * (il * n_ctx + n_past),
             )
             v = ggml.view_1d(
-                ctx.raw, model.memory_v, N * n_embd,
+                g.ctx, model.memory_v, N * n_embd,
                 ggml.element_size(model.memory_v) * n_embd * (il * n_ctx + n_past),
             )
-            ggml.build_forward_expand(gf, ggml.cpy(ctx.raw, Kcur, k))
-            ggml.build_forward_expand(gf, ggml.cpy(ctx.raw, Vcur, v))
+            g.build_forward(ggml.cpy(g.ctx, Kcur, k))
+            g.build_forward(ggml.cpy(g.ctx, Vcur, v))
 
         Q = ggml.permute(
-            ctx.raw,
-            ggml.cont_3d(ctx.raw, Qcur, n_embd // n_head, n_head, N),
+            g.ctx,
+            ggml.cont_3d(g.ctx, Qcur, n_embd // n_head, n_head, N),
             0, 2, 1, 3,
         )
 
         K = ggml.permute(
-            ctx.raw,
-            ggml.reshape_3d(
-                ctx.raw,
+            g.ctx,
+            g.reshape(
                 ggml.view_1d(
-                    ctx.raw, model.memory_k, (n_past + N) * n_embd,
+                    g.ctx, model.memory_k, (n_past + N) * n_embd,
                     il * n_ctx * ggml.element_size(model.memory_k) * n_embd,
                 ),
                 n_embd // n_head, n_head, n_past + N,
@@ -396,19 +391,18 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
             0, 2, 1, 3,
         )
 
-        KQ = ggml.mul_mat(ctx.raw, K, Q)
-        KQ_scaled = ggml.scale(ctx.raw, KQ, 1.0 / math.sqrt(n_embd / n_head))
-        KQ_masked = ggml.diag_mask_inf(ctx.raw, KQ_scaled, n_past)
-        KQ_soft_max = ggml.soft_max(ctx.raw, KQ_masked)
+        KQ = g.mul_mat(K, Q)
+        KQ_scaled = g.scale(KQ, 1.0 / math.sqrt(n_embd / n_head))
+        KQ_masked = ggml.diag_mask_inf(g.ctx, KQ_scaled, n_past)
+        KQ_soft_max = g.soft_max(KQ_masked)
 
         V_trans = ggml.cont_3d(
-            ctx.raw,
+            g.ctx,
             ggml.permute(
-                ctx.raw,
-                ggml.reshape_3d(
-                    ctx.raw,
+                g.ctx,
+                g.reshape(
                     ggml.view_1d(
-                        ctx.raw, model.memory_v, (n_past + N) * n_embd,
+                        g.ctx, model.memory_v, (n_past + N) * n_embd,
                         il * n_ctx * ggml.element_size(model.memory_v) * n_embd,
                     ),
                     n_embd // n_head, n_head, n_past + N,
@@ -418,40 +412,40 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
             n_past + N, n_embd // n_head, n_head,
         )
 
-        KQV = ggml.mul_mat(ctx.raw, V_trans, KQ_soft_max)
-        KQV_merged = ggml.permute(ctx.raw, KQV, 0, 2, 1, 3)
-        cur = ggml.cont_2d(ctx.raw, KQV_merged, n_embd, N)
+        KQV = g.mul_mat(V_trans, KQ_soft_max)
+        KQV_merged = ggml.permute(g.ctx, KQV, 0, 2, 1, 3)
+        cur = ggml.cont_2d(g.ctx, KQV_merged, n_embd, N)
 
-        cur = ggml.mul_mat(ctx.raw, layer.c_attn_proj_w, cur)
-        cur = ggml.add(ctx.raw, cur, layer.c_attn_proj_b)
+        cur = g.mul_mat(layer.c_attn_proj_w, cur)
+        cur = g.add(cur, layer.c_attn_proj_b)
 
-        cur = ggml.add(ctx.raw, cur, inpL)
+        cur = g.add(cur, inpL)
 
         inpFF = cur
 
-        cur = ggml.norm(ctx.raw, inpFF, hp.eps)
-        cur = ggml.add(ctx.raw, ggml.mul(ctx.raw, cur, layer.ln_2_g), layer.ln_2_b)
+        cur = g.norm(inpFF, hp.eps)
+        cur = g.add(g.mul(cur, layer.ln_2_g), layer.ln_2_b)
 
-        cur = ggml.mul_mat(ctx.raw, layer.c_mlp_fc_w, cur)
-        cur = ggml.add(ctx.raw, cur, layer.c_mlp_fc_b)
+        cur = g.mul_mat(layer.c_mlp_fc_w, cur)
+        cur = g.add(cur, layer.c_mlp_fc_b)
 
-        cur = ggml.gelu(ctx.raw, cur)
+        cur = g.gelu(cur)
 
-        cur = ggml.mul_mat(ctx.raw, layer.c_mlp_proj_w, cur)
-        cur = ggml.add(ctx.raw, cur, layer.c_mlp_proj_b)
+        cur = g.mul_mat(layer.c_mlp_proj_w, cur)
+        cur = g.add(cur, layer.c_mlp_proj_b)
 
-        inpL = ggml.add(ctx.raw, cur, inpFF)
+        inpL = g.add(cur, inpFF)
 
-    inpL = ggml.norm(ctx.raw, inpL, hp.eps)
-    inpL = ggml.add(ctx.raw, ggml.mul(ctx.raw, inpL, model.ln_f_g), model.ln_f_b)
+    inpL = g.norm(inpL, hp.eps)
+    inpL = g.add(g.mul(inpL, model.ln_f_g), model.ln_f_b)
 
-    inpL = ggml.mul_mat(ctx.raw, model.lm_head, inpL)
+    inpL = g.mul_mat(model.lm_head, inpL)
     ggml.set_name(inpL, "logits")
     ggml.set_output(inpL)
 
-    ggml.build_forward_expand(gf, inpL)
+    g.build_forward(inpL)
 
-    return gf, ctx
+    return g
 
 
 # ============================================================================
@@ -469,14 +463,14 @@ def gpt2_eval(
     N = len(embd_inp)
     n_vocab = model.hparams.n_vocab
 
-    gf, graph_ctx = gpt2_graph(model, n_past, N)
+    g = gpt2_graph(model, n_past, N)
 
-    session.runner.compute(gf, inputs={
+    session.runner.compute(g.raw, inputs={
         "embd": np.array(embd_inp, dtype=np.int32),
         "position": np.arange(n_past, n_past + N, dtype=np.int32),
     })
 
-    logits = session.get_slice(gf, "logits",
+    logits = session.get_slice(g, "logits",
                                offset=n_vocab * (N - 1) * 4, count=n_vocab)
 
     return logits
@@ -525,9 +519,8 @@ def main():
         # Reserve memory for worst case
         n_tokens = min(model.hparams.n_ctx, args.n_batch)
         n_past_worst = model.hparams.n_ctx - n_tokens
-        gf_worst, ctx_worst = gpt2_graph(model, n_past_worst, n_tokens)
-        s.reserve(gf_worst)
-        del ctx_worst
+        g_worst = gpt2_graph(model, n_past_worst, n_tokens)
+        s.reserve(g_worst)
 
         mem_size = s.runner.buffer_size
         print(
