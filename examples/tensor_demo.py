@@ -2,7 +2,6 @@
 
 import numpy as np
 
-import ggbond
 from ggbond import Tensor, ggml
 
 
@@ -24,51 +23,47 @@ def main():
     ], dtype=np.float32)
 
     # --- basic matrix multiplication ---
-    with ggbond.Session("cpu") as s:
-        a = Tensor(s, data=matrix_a)
-        b = Tensor(s, data=matrix_b)
-        result = (a @ b).compute().numpy()
+    a = Tensor(data=matrix_a)
+    b = Tensor(data=matrix_b)
+    result = (a @ b).numpy()
 
-        print("Tensor API — a @ b:")
-        print(result)
+    print("Tensor API — a @ b:")
+    print(result)
 
-        # Compare with numpy (ggml mul_mat computes a @ b^T equivalent,
-        # but in GGML column-major so result matches numpy a @ b.T)
-        expected = matrix_a @ matrix_b.T
-        print("\nnumpy a @ b.T:")
-        print(expected)
-        assert np.allclose(result, expected), "mismatch!"
-        print("✓ results match\n")
+    # Compare with numpy (ggml mul_mat computes a @ b^T equivalent,
+    # but in GGML column-major so result matches numpy a @ b.T)
+    expected = matrix_a @ matrix_b.T
+    print("\nnumpy a @ b.T:")
+    print(expected)
+    assert np.allclose(result, expected), "mismatch!"
+    print("✓ results match\n")
 
     # --- chained operations ---
-    with ggbond.Session("cpu") as s:
-        a = Tensor(s, data=matrix_a)
-        b = Tensor(s, data=matrix_b)
-        result = (a @ b).relu().compute().numpy()
-        print("(a @ b).relu():")
-        print(result)
-        assert np.all(result >= 0), "relu failed!"
-        print("✓ relu correct\n")
+    a = Tensor(data=matrix_a)
+    b = Tensor(data=matrix_b)
+    result = (a @ b).relu().numpy()
+    print("(a @ b).relu():")
+    print(result)
+    assert np.all(result >= 0), "relu failed!"
+    print("✓ relu correct\n")
 
     # --- scalar operations ---
-    with ggbond.Session("cpu") as s:
-        a = Tensor(s, data=matrix_a)
-        scaled = (a * 2.0).compute().numpy()
-        print("a * 2.0:")
-        print(scaled)
-        assert np.allclose(scaled, matrix_a * 2.0), "scale failed!"
-        print("✓ scalar multiply correct\n")
+    a = Tensor(data=matrix_a)
+    scaled = (a * 2.0).numpy()
+    print("a * 2.0:")
+    print(scaled)
+    assert np.allclose(scaled, matrix_a * 2.0), "scale failed!"
+    print("✓ scalar multiply correct\n")
 
     # --- arithmetic chain ---
-    with ggbond.Session("cpu") as s:
-        a = Tensor(s, data=np.array([[1, 2], [3, 4]], dtype=np.float32))
-        b = Tensor(s, data=np.array([[5, 6], [7, 8]], dtype=np.float32))
-        result = (a + b).compute().numpy()
-        print("a + b:")
-        print(result)
-        expected = np.array([[6, 8], [10, 12]], dtype=np.float32)
-        assert np.allclose(result, expected), "add failed!"
-        print("✓ element-wise add correct\n")
+    a = Tensor(data=np.array([[1, 2], [3, 4]], dtype=np.float32))
+    b = Tensor(data=np.array([[5, 6], [7, 8]], dtype=np.float32))
+    result = (a + b).numpy()
+    print("a + b:")
+    print(result)
+    expected = np.array([[6, 8], [10, 12]], dtype=np.float32)
+    assert np.allclose(result, expected), "add failed!"
+    print("✓ element-wise add correct\n")
 
     print("All tests passed!")
 

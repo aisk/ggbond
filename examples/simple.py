@@ -3,7 +3,6 @@ import sys
 
 import numpy as np
 
-import ggbond
 from ggbond import Tensor, ggml
 
 
@@ -37,14 +36,13 @@ def main():
         [5, 4]
     ], dtype=np.float32)
 
-    with ggbond.Session(backend_type) as s:
-        a = Tensor(s, data=matrix_a)
-        b = Tensor(s, data=matrix_b)
-        result = (a @ b).compute().numpy()
+    a = Tensor(data=matrix_a)
+    b = Tensor(data=matrix_b)
+    result = (a @ b).numpy(backend=backend_type)
 
-        rows, cols = result.shape
-        print(f"mul mat ({cols} x {rows}):")
-        print(result)
+    rows, cols = result.shape
+    print(f"mul mat ({cols} x {rows}):")
+    print(result)
 
 
 if __name__ == "__main__":
