@@ -7,7 +7,8 @@ import numpy as np
 from ggbond import ggml
 from ggbond.backend import Backend
 from ggbond.context import Context
-from ggbond.graph import GAllocr, Graph, load_gguf as _load_gguf
+from ggbond.graph import GAllocr, Graph
+from ggbond.gguf import load_gguf as _load_gguf
 
 
 class Session:
@@ -18,7 +19,6 @@ class Session:
         self._allocr = GAllocr(self._backend)
         self._contexts: list[Context] = []
         self._buffers: list[ggml.Buffer] = []
-        self._reserved = False
 
     # -- properties (escape hatches) ------------------------------------------
 
@@ -78,9 +78,7 @@ class Session:
             if isinstance(tensor_or_name, str)
             else tensor_or_name
         )
-        out = np.empty(ggml.nelements(tensor), dtype=dtype)
-        ggml.backend_tensor_get(tensor, out, 0, ggml.nbytes(tensor))
-        return out
+        return self._backend.tensor_get(tensor, dtype)
 
     def get_slice(
         self, graph: ggml.Graph | Graph, name: str, offset: int, count: int, dtype=np.float32
@@ -88,33 +86,25 @@ class Session:
         """Read *count* elements from tensor *name* starting at byte *offset*."""
         raw = self._raw(graph)
         tensor = ggml.graph_get_tensor(raw, name)
-        out = np.empty(count, dtype=dtype)
-        ggml.backend_tensor_get(tensor, out, offset, count * out.itemsize)
-        return out
+        return self._backend.tensor_get_slice(tensor, offset, count, dtype)
 
     # -- graph execution ------------------------------------------------------
 
     def reserve(self, graph: ggml.Graph | Graph) -> int:
         """Explicitly reserve memory for *graph*. Returns buffer size in bytes."""
-        size = self._allocr.reserve(self._raw(graph))
-        self._reserved = True
-        return size
+        return self._allocr.reserve(self._raw(graph))
 
     def run(self, graph: ggml.Graph | Graph, inputs: dict[str, np.ndarray] | None = None) -> None:
-        """Reserve (if needed), allocate, set inputs, and compute *graph*.
+        """Allocate, set inputs, and compute *graph*.
 
-        On first call, automatically reserves memory.  Subsequent calls only allocate and compute.
+        Caller must call :meth:`reserve` before the first :meth:`run`.
         """
         raw = self._raw(graph)
-        if not self._reserved:
-            self._allocr.reserve(raw)
-            self._reserved = True
         self._allocr.alloc(raw)
         if inputs:
             for name, data in inputs.items():
                 tensor = ggml.graph_get_tensor(raw, name)
-                flat = data.flatten() if data.ndim > 1 else data
-                ggml.backend_tensor_set(tensor, flat, 0, ggml.nbytes(tensor))
+                self._backend.tensor_set(tensor, data)
         self._backend.compute(raw)
 
     @staticmethod

@@ -26,7 +26,8 @@ except ImportError:
 
 from ggbond.backend import Backend
 from ggbond.context import Context
-from ggbond.graph import GAllocr, Graph, load_gguf
+from ggbond.graph import GAllocr, Graph
+from ggbond.gguf import load_gguf
 from ggbond.session import Session
 from ggbond.tensor import Tensor
 

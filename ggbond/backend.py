@@ -67,6 +67,12 @@ class Backend:
         ggml.backend_tensor_get(tensor, out, 0, ggml.nbytes(tensor))
         return out
 
+    def tensor_get_slice(self, tensor: ggml.Tensor, offset: int, count: int, dtype=np.float32) -> np.ndarray:
+        """Read *count* elements from *tensor* starting at byte *offset*."""
+        out = np.empty(count, dtype=dtype)
+        ggml.backend_tensor_get(tensor, out, offset, count * out.itemsize)
+        return out
+
     # -- lifecycle ------------------------------------------------------------
 
     def __del__(self) -> None:

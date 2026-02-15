@@ -75,6 +75,7 @@ class Magika:
         g = self._build_graph(n_files)
 
         inputs = np.concatenate([self._preprocess_file(f) for f in files])
+        self._session.reserve(g)
         self._session.run(g, inputs={"input": inputs})
 
         all_probs = self._session.get(g, "target_label_probs")

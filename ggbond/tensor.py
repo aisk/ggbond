@@ -45,13 +45,9 @@ def _materialize_op(op: str, ctx_raw, ggml_inputs: list, kwargs: dict):
         return getattr(ggml, op)(ctx_raw, ggml_inputs[0], ggml_inputs[1])
     if op == "mul_mat":
         return ggml.mul_mat(ctx_raw, ggml_inputs[0], ggml_inputs[1])
-    if op in ("relu", "gelu", "silu", "sigmoid", "tanh",
-              "sqrt", "sqr", "log", "exp", "sin", "cos",
-              "neg", "abs", "cont",
-              "gelu_quick", "hardswish", "hardsigmoid", "elu",
-              "swiglu", "reglu", "geglu"):
+    if op in _UNARY_OPS:
         return getattr(ggml, op)(ctx_raw, ggml_inputs[0])
-    if op in ("sum", "sum_rows", "mean", "argmax"):
+    if op in _REDUCTION_OPS:
         return getattr(ggml, op)(ctx_raw, ggml_inputs[0])
     if op == "soft_max":
         return ggml.soft_max(ctx_raw, ggml_inputs[0])
@@ -116,28 +112,12 @@ def _infer_shape(op: str, inputs: tuple[Tensor, ...], kwargs: dict) -> tuple[int
         # ggml mul_mat(first, second): ne0 = first.ne1, ne1 = second.ne1
         first, second = inputs[0]._shape, inputs[1]._shape
         return (first[1], second[1]) + second[2:]
-    if op in _BINARY_OPS:
-        return inputs[0]._shape
-    if op in ("relu", "gelu", "silu", "sigmoid", "tanh",
-              "sqrt", "sqr", "log", "exp", "sin", "cos",
-              "neg", "abs", "cont", "scale", "clamp", "leaky_relu",
-              "gelu_quick", "hardswish", "hardsigmoid", "elu",
-              "swiglu", "reglu", "geglu", "scale_add"):
-        return inputs[0]._shape
-    if op == "soft_max":
-        return inputs[0]._shape
-    if op == "norm" or op == "rms_norm" or op == "l2_norm":
-        return inputs[0]._shape
     if op == "transpose":
         s = inputs[0]._shape
         return (s[1], s[0]) + s[2:] if len(s) >= 2 else s
-    if op in ("sum",):
+    if op == "sum":
         return (1,)
-    if op == "sum_rows":
-        return (1,) + inputs[0]._shape[1:]
-    if op == "mean":
-        return (1,) + inputs[0]._shape[1:]
-    if op == "argmax":
+    if op in ("sum_rows", "mean", "argmax"):
         return (1,) + inputs[0]._shape[1:]
     if op.startswith("reshape_"):
         return kwargs["shape"]
