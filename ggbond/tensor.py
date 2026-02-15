@@ -1,16 +1,15 @@
-"""Lazy-evaluated high-level Tensor built on top of Session."""
+"""Lazy-evaluated high-level Tensor built on top of GGML."""
 
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ggbond import ggml
-
-if TYPE_CHECKING:
-    from ggbond.session import Session
+from ggbond.backend import Backend
+from ggbond.context import Context
+from ggbond.graph import GAllocr, Graph
 
 # dtype mapping: ggml.Type → numpy dtype
 _GGML_TO_NP = {
@@ -128,20 +127,18 @@ class Tensor:
     """Lazy tensor that records operations and materializes on ``.compute()``."""
 
     __slots__ = (
-        "_session", "_data", "_op", "_inputs", "_kwargs",
+        "_data", "_op", "_inputs", "_kwargs",
         "_dtype", "_shape", "_name", "_cached",
     )
 
     def __init__(
         self,
-        session: Session,
         *,
         data: np.ndarray | None = None,
         shape: tuple[int, ...] | None = None,
         dtype=None,
         name: str | None = None,
     ):
-        self._session = session
         self._op: str | None = None
         self._inputs: tuple[Tensor, ...] = ()
         self._kwargs: dict = {}
@@ -164,14 +161,12 @@ class Tensor:
     @classmethod
     def _from_op(
         cls,
-        session: Session,
         op: str,
         inputs: tuple[Tensor, ...],
         dtype=None,
         kwargs: dict | None = None,
     ) -> Tensor:
         obj = object.__new__(cls)
-        obj._session = session
         obj._op = op
         obj._inputs = inputs
         obj._kwargs = kwargs or {}
@@ -204,26 +199,21 @@ class Tensor:
 
     # -- operators ------------------------------------------------------------
 
-    def _check_session(self, other: Tensor) -> None:
-        if self._session is not other._session:
-            raise ValueError("cannot mix tensors from different sessions")
-
     def _binary_op(self, other: Tensor | float | int, op: str) -> Tensor:
         if isinstance(other, (int, float)):
             if op == "mul":
-                return Tensor._from_op(self._session, "scale", (self,), kwargs={"s": float(other)})
+                return Tensor._from_op("scale", (self,), kwargs={"s": float(other)})
             if op == "div":
-                return Tensor._from_op(self._session, "scale", (self,), kwargs={"s": 1.0 / float(other)})
+                return Tensor._from_op("scale", (self,), kwargs={"s": 1.0 / float(other)})
             if op == "add":
-                return Tensor._from_op(self._session, "scale_add", (self,), kwargs={"s": 1.0, "b": float(other)})
+                return Tensor._from_op("scale_add", (self,), kwargs={"s": 1.0, "b": float(other)})
             if op == "sub":
-                return Tensor._from_op(self._session, "scale_add", (self,), kwargs={"s": 1.0, "b": -float(other)})
+                return Tensor._from_op("scale_add", (self,), kwargs={"s": 1.0, "b": -float(other)})
             raise TypeError(f"unsupported scalar op: {op}")
-        self._check_session(other)
-        return Tensor._from_op(self._session, op, (self, other))
+        return Tensor._from_op(op, (self, other))
 
     def _unary_op(self, op: str, **kwargs) -> Tensor:
-        return Tensor._from_op(self._session, op, (self,), kwargs=kwargs)
+        return Tensor._from_op(op, (self,), kwargs=kwargs)
 
     def __add__(self, other):
         return self._binary_op(other, "add")
@@ -237,7 +227,7 @@ class Tensor:
     def __rsub__(self, other):
         if isinstance(other, (int, float)):
             return Tensor._from_op(
-                self._session, "scale_add", (self,),
+                "scale_add", (self,),
                 kwargs={"s": -1.0, "b": float(other)},
             )
         return NotImplemented
@@ -254,9 +244,8 @@ class Tensor:
     def __matmul__(self, other):
         if not isinstance(other, Tensor):
             return NotImplemented
-        self._check_session(other)
         # Swap operands: ggml mul_mat(b, a) so that (a @ b).numpy() == a_np @ b_np.T
-        return Tensor._from_op(self._session, "mul_mat", (other, self))
+        return Tensor._from_op("mul_mat", (other, self))
 
     def __neg__(self):
         return self._unary_op("neg")
@@ -340,13 +329,13 @@ class Tensor:
         if ndim < 1 or ndim > 4:
             raise ValueError(f"reshape supports 1-4 dims, got {ndim}")
         return Tensor._from_op(
-            self._session, f"reshape_{ndim}d", (self,),
+            f"reshape_{ndim}d", (self,),
             kwargs={"shape": shape},
         )
 
     # -- compute --------------------------------------------------------------
 
-    def compute(self) -> Tensor:
+    def compute(self, backend: Backend | str = "cpu") -> Tensor:
         """Materialize the computation graph and execute it. Returns self."""
         ordered, leaves = _topo_sort(self)
 
@@ -358,62 +347,81 @@ class Tensor:
             self._cached = self._data.flatten().astype(np.float32)
             return self
 
-        # Count total tensors needed: leaves + ops + graph overhead
-        n_ops = sum(1 for n in ordered if n._op is not None)
-        # Each op may produce intermediate tensors; estimate generously
-        n_model_tensors = len(leaves)
-        n_graph_tensors = n_ops * 2 + 10  # ops + intermediates + slack
+        # Resolve backend
+        if isinstance(backend, str):
+            backend = Backend(backend)
+            owns_backend = True
+        else:
+            owns_backend = False
 
-        # Phase 1: Create model context for leaf tensors
-        ctx_model = self._session.context(n_tensors=n_model_tensors)
+        try:
+            # Count total tensors needed
+            n_ops = sum(1 for n in ordered if n._op is not None)
+            n_model_tensors = len(leaves)
+            n_graph_tensors = n_ops * 2 + 10
 
-        # Create ggml tensors for leaves and set as input
-        ggml_map: dict[int, ggml.Tensor] = {}
-        for i, leaf in enumerate(leaves):
-            t = ctx_model.new_tensor(leaf._dtype, *leaf._shape)
-            ggml.set_input(t)
-            name = leaf._name or f"leaf_{i}"
-            ggml.set_name(t, name)
-            ggml_map[id(leaf)] = t
+            # Phase 1: Create model context for leaf tensors
+            ctx_model = Context(n_tensors=n_model_tensors)
 
-        # Allocate leaf memory on backend
-        self._session.alloc(ctx_model)
+            # Create ggml tensors for leaves and set as input
+            ggml_map: dict[int, ggml.Tensor] = {}
+            for i, leaf in enumerate(leaves):
+                t = ctx_model.new_tensor(leaf._dtype, *leaf._shape)
+                ggml.set_input(t)
+                name = leaf._name or f"leaf_{i}"
+                ggml.set_name(t, name)
+                ggml_map[id(leaf)] = t
 
-        # Set leaf data
-        for leaf in leaves:
-            if leaf._data is not None:
-                self._session.set(ggml_map[id(leaf)], leaf._data)
+            # Allocate leaf memory on backend
+            buf = backend.alloc_ctx(ctx_model)
 
-        # Phase 2: Build computation graph
-        g = self._session.graph(max_nodes=n_graph_tensors)
+            # Set leaf data
+            for leaf in leaves:
+                if leaf._data is not None:
+                    backend.tensor_set(ggml_map[id(leaf)], leaf._data)
 
-        # Materialize ops in topological order
-        for node in ordered:
-            if node._op is None:
-                continue
-            ggml_inputs = [ggml_map[id(inp)] for inp in node._inputs]
-            ggml_result = _materialize_op(node._op, g.ctx, ggml_inputs, node._kwargs)
-            if node._name:
-                ggml.set_name(ggml_result, node._name)
-            ggml_map[id(node)] = ggml_result
+            # Phase 2: Build computation graph
+            g = Graph(max_nodes=n_graph_tensors)
 
-        # Mark output and build graph
-        result_ggml = ggml_map[id(self)]
-        ggml.set_output(result_ggml)
-        g.build_forward(result_ggml)
+            # Materialize ops in topological order
+            for node in ordered:
+                if node._op is None:
+                    continue
+                ggml_inputs = [ggml_map[id(inp)] for inp in node._inputs]
+                ggml_result = _materialize_op(node._op, g.ctx, ggml_inputs, node._kwargs)
+                if node._name:
+                    ggml.set_name(ggml_result, node._name)
+                ggml_map[id(node)] = ggml_result
 
-        # Phase 3: Reserve, execute, extract
-        self._session.reserve(g)
-        self._session.run(g)
+            # Mark output and build graph
+            result_ggml = ggml_map[id(self)]
+            ggml.set_output(result_ggml)
+            g.build_forward(result_ggml)
 
-        out = self._session.get(g, result_ggml)
-        self._cached = out
+            # Phase 3: Reserve, execute, extract
+            allocr = GAllocr(backend)
+            allocr.reserve(g.raw)
+            allocr.alloc(g.raw)
+            backend.compute(g.raw)
+
+            out = backend.tensor_get(result_ggml)
+            self._cached = out
+
+            # Cleanup temporary resources
+            allocr.close()
+            g.close()
+            ctx_model.close()
+            ggml.backend_buffer_free(buf)
+        finally:
+            if owns_backend:
+                backend.close()
+
         return self
 
-    def numpy(self) -> np.ndarray:
+    def numpy(self, backend: Backend | str = "cpu") -> np.ndarray:
         """Return result as numpy array. Triggers compute() if needed."""
         if self._cached is None:
-            self.compute()
+            self.compute(backend)
         np_shape = tuple(reversed(self._shape))
         return self._cached.reshape(np_shape)
 
