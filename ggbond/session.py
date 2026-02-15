@@ -7,7 +7,7 @@ import numpy as np
 from ggbond import ggml
 from ggbond.backend import Backend
 from ggbond.context import Context
-from ggbond.graph import GraphRunner, load_gguf as _load_gguf
+from ggbond.graph import Graph, GraphRunner, load_gguf as _load_gguf
 
 
 class Session:
@@ -41,14 +41,17 @@ class Session:
             self._contexts.append(ctx)
         return ctx
 
-    def graph_context(
+    def graph(
         self, max_nodes: int | None = None, *, grads: bool = False, track: bool = True
-    ) -> Context:
-        """Create a graph-sized context. Tracked by default for automatic cleanup."""
-        ctx = Context.for_graph(max_nodes=max_nodes, grads=grads)
+    ) -> Graph:
+        """Create a :class:`Graph` (with its own internal context).
+
+        Tracked by default for automatic cleanup.
+        """
+        g = Graph(max_nodes=max_nodes, grads=grads)
         if track:
-            self._contexts.append(ctx)
-        return ctx
+            self._contexts.append(g._context)
+        return g
 
     # -- allocation -----------------------------------------------------------
 
@@ -64,33 +67,39 @@ class Session:
         """Copy *data* into *tensor*."""
         self._backend.tensor_set(tensor, data)
 
-    def get(self, graph: ggml.Graph, tensor_or_name, dtype=np.float32) -> np.ndarray:
+    def get(self, graph: ggml.Graph | Graph, tensor_or_name, dtype=np.float32) -> np.ndarray:
         """Read full tensor data from the graph."""
-        return self._runner.get(graph, tensor_or_name, dtype=dtype)
+        return self._runner.get(self._raw(graph), tensor_or_name, dtype=dtype)
 
     def get_slice(
-        self, graph: ggml.Graph, name: str, offset: int, count: int, dtype=np.float32
+        self, graph: ggml.Graph | Graph, name: str, offset: int, count: int, dtype=np.float32
     ) -> np.ndarray:
         """Read *count* elements from tensor *name* starting at byte *offset*."""
-        return self._runner.get_slice(graph, name, offset, count, dtype=dtype)
+        return self._runner.get_slice(self._raw(graph), name, offset, count, dtype=dtype)
 
     # -- graph execution ------------------------------------------------------
 
-    def reserve(self, graph: ggml.Graph) -> int:
+    def reserve(self, graph: ggml.Graph | Graph) -> int:
         """Explicitly reserve memory for *graph*. Returns buffer size in bytes."""
-        size = self._runner.reserve(graph)
+        size = self._runner.reserve(self._raw(graph))
         self._reserved = True
         return size
 
-    def run(self, graph: ggml.Graph, inputs: dict[str, np.ndarray] | None = None) -> None:
+    def run(self, graph: ggml.Graph | Graph, inputs: dict[str, np.ndarray] | None = None) -> None:
         """Reserve (if needed) and compute *graph*.
 
         On first call, automatically reserves memory.  Subsequent calls only compute.
         """
+        raw = self._raw(graph)
         if not self._reserved:
-            self._runner.reserve(graph)
+            self._runner.reserve(raw)
             self._reserved = True
-        self._runner.compute(graph, inputs=inputs)
+        self._runner.compute(raw, inputs=inputs)
+
+    @staticmethod
+    def _raw(graph: ggml.Graph | Graph) -> ggml.Graph:
+        """Resolve a Graph or ggml.Graph to the underlying ggml.Graph."""
+        return graph.raw if isinstance(graph, Graph) else graph
 
     # -- GGUF -----------------------------------------------------------------
 
