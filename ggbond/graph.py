@@ -168,11 +168,10 @@ class Graph:
         self.close()
 
 
-class GraphRunner:
-    """Wraps ``ggml_gallocr`` for graph allocation, execution, and result extraction."""
+class GAllocr:
+    """Wraps ``ggml_gallocr`` for graph memory allocation and lifecycle management."""
 
     def __init__(self, backend: Backend):
-        self._backend = backend
         self._allocr = ggml.gallocr_new(backend.buffer_type)
 
     # -- core operations ------------------------------------------------------
@@ -182,51 +181,9 @@ class GraphRunner:
         ggml.gallocr_reserve(self._allocr, graph)
         return ggml.gallocr_get_buffer_size(self._allocr, 0)
 
-    def compute(
-        self,
-        graph: ggml.Graph,
-        inputs: dict[str, np.ndarray] | None = None,
-    ) -> None:
-        """Allocate graph, optionally set inputs by name, and compute."""
+    def alloc(self, graph: ggml.Graph) -> None:
+        """Allocate graph memory (must call :meth:`reserve` first)."""
         ggml.gallocr_alloc_graph(self._allocr, graph)
-        if inputs:
-            for name, data in inputs.items():
-                tensor = ggml.graph_get_tensor(graph, name)
-                flat = data.flatten() if data.ndim > 1 else data
-                ggml.backend_tensor_set(tensor, flat, 0, ggml.nbytes(tensor))
-        self._backend.compute(graph)
-
-    # -- result extraction ----------------------------------------------------
-
-    def get(
-        self, graph: ggml.Graph, tensor_or_name, dtype=np.float32
-    ) -> np.ndarray:
-        """Read full tensor data from the graph.
-
-        *tensor_or_name* can be a ``ggml.Tensor`` object or a string name.
-        """
-        tensor = (
-            ggml.graph_get_tensor(graph, tensor_or_name)
-            if isinstance(tensor_or_name, str)
-            else tensor_or_name
-        )
-        out = np.empty(ggml.nelements(tensor), dtype=dtype)
-        ggml.backend_tensor_get(tensor, out, 0, ggml.nbytes(tensor))
-        return out
-
-    def get_slice(
-        self,
-        graph: ggml.Graph,
-        name: str,
-        offset: int,
-        count: int,
-        dtype=np.float32,
-    ) -> np.ndarray:
-        """Read *count* elements from tensor *name* starting at byte *offset*."""
-        tensor = ggml.graph_get_tensor(graph, name)
-        out = np.empty(count, dtype=dtype)
-        ggml.backend_tensor_get(tensor, out, offset, count * out.itemsize)
-        return out
 
     # -- properties -----------------------------------------------------------
 
@@ -246,7 +203,7 @@ class GraphRunner:
             ggml.gallocr_free(self._allocr)
             self._allocr = None
 
-    def __enter__(self) -> GraphRunner:
+    def __enter__(self) -> GAllocr:
         return self
 
     def __exit__(self, *exc) -> None:
