@@ -596,6 +596,12 @@ PYBIND11_MODULE(ggml, m) {
         return TensorPtr(ggml_set_name(as<ggml_tensor>(tensor), name));
     }, "Set tensor name", py::arg("tensor"), py::arg("name"));
 
+    // Bind ggml_sort_order enum
+    py::enum_<ggml_sort_order>(m, "SortOrder")
+        .value("ASC", GGML_SORT_ORDER_ASC)
+        .value("DESC", GGML_SORT_ORDER_DESC)
+        .export_values();
+
     // Bind ggml_op_pool enum
     py::enum_<ggml_op_pool>(m, "OpPool")
         .value("MAX", GGML_OP_POOL_MAX)
@@ -607,6 +613,240 @@ PYBIND11_MODULE(ggml, m) {
     m.def("pool_1d", [](ContextPtr ctx, TensorPtr a, ggml_op_pool op, int k0, int s0, int p0) {
         return TensorPtr(ggml_pool_1d(as<ggml_context>(ctx), as<ggml_tensor>(a), op, k0, s0, p0));
     }, "1D pooling (max or average)", py::arg("ctx"), py::arg("a"), py::arg("op"), py::arg("k0"), py::arg("s0"), py::arg("p0"));
+
+    m.def("pool_2d", [](ContextPtr ctx, TensorPtr a, ggml_op_pool op, int k0, int k1, int s0, int s1, float p0, float p1) {
+        return TensorPtr(ggml_pool_2d(as<ggml_context>(ctx), as<ggml_tensor>(a), op, k0, k1, s0, s1, p0, p1));
+    }, "2D pooling (max or average)", py::arg("ctx"), py::arg("a"), py::arg("op"), py::arg("k0"), py::arg("k1"), py::arg("s0"), py::arg("s1"), py::arg("p0"), py::arg("p1"));
+
+    // Attention-related operations
+    m.def("soft_max_ext", [](ContextPtr ctx, TensorPtr a, TensorPtr mask, float scale, float max_bias) {
+        return TensorPtr(ggml_soft_max_ext(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(mask), scale, max_bias));
+    }, "Softmax with mask, scale and ALiBi bias", py::arg("ctx"), py::arg("a"), py::arg("mask"), py::arg("scale"), py::arg("max_bias"));
+
+    m.def("diag_mask_zero", [](ContextPtr ctx, TensorPtr a, int n_past) {
+        return TensorPtr(ggml_diag_mask_zero(as<ggml_context>(ctx), as<ggml_tensor>(a), n_past));
+    }, "Set elements above the diagonal to 0", py::arg("ctx"), py::arg("a"), py::arg("n_past"));
+
+    m.def("rope", [](ContextPtr ctx, TensorPtr a, TensorPtr b, int n_dims, int mode) {
+        return TensorPtr(ggml_rope(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b), n_dims, mode));
+    }, "Rotary position embedding", py::arg("ctx"), py::arg("a"), py::arg("b"), py::arg("n_dims"), py::arg("mode"));
+
+    m.def("rope_ext", [](ContextPtr ctx, TensorPtr a, TensorPtr b, TensorPtr c, int n_dims, int mode, int n_ctx_orig, float freq_base, float freq_scale, float ext_factor, float attn_factor, float beta_fast, float beta_slow) {
+        return TensorPtr(ggml_rope_ext(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b), as<ggml_tensor>(c), n_dims, mode, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow));
+    }, "Extended rotary position embedding", py::arg("ctx"), py::arg("a"), py::arg("b"), py::arg("c"), py::arg("n_dims"), py::arg("mode"), py::arg("n_ctx_orig"), py::arg("freq_base"), py::arg("freq_scale"), py::arg("ext_factor"), py::arg("attn_factor"), py::arg("beta_fast"), py::arg("beta_slow"));
+
+    m.def("flash_attn_ext", [](ContextPtr ctx, TensorPtr q, TensorPtr k, TensorPtr v, TensorPtr mask, float scale, float max_bias, float logit_softcap) {
+        return TensorPtr(ggml_flash_attn_ext(as<ggml_context>(ctx), as<ggml_tensor>(q), as<ggml_tensor>(k), as<ggml_tensor>(v), as<ggml_tensor>(mask), scale, max_bias, logit_softcap));
+    }, "Flash Attention", py::arg("ctx"), py::arg("q"), py::arg("k"), py::arg("v"), py::arg("mask"), py::arg("scale"), py::arg("max_bias"), py::arg("logit_softcap"));
+
+    // Convolution operations
+    m.def("conv_1d", [](ContextPtr ctx, TensorPtr a, TensorPtr b, int s0, int p0, int d0) {
+        return TensorPtr(ggml_conv_1d(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b), s0, p0, d0));
+    }, "1D convolution", py::arg("ctx"), py::arg("a"), py::arg("b"), py::arg("s0"), py::arg("p0"), py::arg("d0"));
+
+    m.def("conv_2d", [](ContextPtr ctx, TensorPtr a, TensorPtr b, int s0, int s1, int p0, int p1, int d0, int d1) {
+        return TensorPtr(ggml_conv_2d(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b), s0, s1, p0, p1, d0, d1));
+    }, "2D convolution", py::arg("ctx"), py::arg("a"), py::arg("b"), py::arg("s0"), py::arg("s1"), py::arg("p0"), py::arg("p1"), py::arg("d0"), py::arg("d1"));
+
+    // Tensor operations
+    m.def("dup", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_dup(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Duplicate tensor", py::arg("ctx"), py::arg("a"));
+
+    m.def("dup_tensor", [](ContextPtr ctx, TensorPtr src) {
+        return TensorPtr(ggml_dup_tensor(as<ggml_context>(ctx), as<ggml_tensor>(src)));
+    }, "Duplicate tensor structure (without data)", py::arg("ctx"), py::arg("src"));
+
+    m.def("view_tensor", [](ContextPtr ctx, TensorPtr src) {
+        return TensorPtr(ggml_view_tensor(as<ggml_context>(ctx), as<ggml_tensor>(src)));
+    }, "Create a view of tensor", py::arg("ctx"), py::arg("src"));
+
+    m.def("cast", [](ContextPtr ctx, TensorPtr a, ggml_type type) {
+        return TensorPtr(ggml_cast(as<ggml_context>(ctx), as<ggml_tensor>(a), type));
+    }, "Cast tensor to different type", py::arg("ctx"), py::arg("a"), py::arg("type"));
+
+    m.def("pad", [](ContextPtr ctx, TensorPtr a, int p0, int p1, int p2, int p3) {
+        return TensorPtr(ggml_pad(as<ggml_context>(ctx), as<ggml_tensor>(a), p0, p1, p2, p3));
+    }, "Pad tensor with zeros", py::arg("ctx"), py::arg("a"), py::arg("p0"), py::arg("p1"), py::arg("p2"), py::arg("p3"));
+
+    m.def("arange", [](ContextPtr ctx, float start, float stop, float step) {
+        return TensorPtr(ggml_arange(as<ggml_context>(ctx), start, stop, step));
+    }, "Create range tensor", py::arg("ctx"), py::arg("start"), py::arg("stop"), py::arg("step"));
+
+    m.def("argsort", [](ContextPtr ctx, TensorPtr a, ggml_sort_order order) {
+        return TensorPtr(ggml_argsort(as<ggml_context>(ctx), as<ggml_tensor>(a), order));
+    }, "Get sorted indices", py::arg("ctx"), py::arg("a"), py::arg("order"));
+
+    m.def("top_k", [](ContextPtr ctx, TensorPtr a, int k) {
+        return TensorPtr(ggml_top_k(as<ggml_context>(ctx), as<ggml_tensor>(a), k));
+    }, "Top-K elements per row", py::arg("ctx"), py::arg("a"), py::arg("k"));
+
+    m.def("diag", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_diag(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Create diagonal matrix", py::arg("ctx"), py::arg("a"));
+
+    m.def("repeat_4d", [](ContextPtr ctx, TensorPtr a, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
+        return TensorPtr(ggml_repeat_4d(as<ggml_context>(ctx), as<ggml_tensor>(a), ne0, ne1, ne2, ne3));
+    }, "Repeat tensor to specified shape", py::arg("ctx"), py::arg("a"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"));
+
+    m.def("set_rows", [](ContextPtr ctx, TensorPtr a, TensorPtr b, TensorPtr c) {
+        return TensorPtr(ggml_set_rows(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b), as<ggml_tensor>(c)));
+    }, "Set rows by index (a: dest, b: src rows, c: indices)", py::arg("ctx"), py::arg("a"), py::arg("b"), py::arg("c"));
+
+    m.def("scale_bias", [](ContextPtr ctx, TensorPtr a, float s, float b) {
+        return TensorPtr(ggml_scale_bias(as<ggml_context>(ctx), as<ggml_tensor>(a), s, b));
+    }, "Scale and bias: x = s*a + b", py::arg("ctx"), py::arg("a"), py::arg("s"), py::arg("b"));
+
+    m.def("cross_entropy_loss", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_cross_entropy_loss(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "Cross entropy loss (a: logits, b: labels)", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    // Tensor property queries
+    m.def("is_scalar", [](TensorPtr tensor) {
+        return ggml_is_scalar(as<ggml_tensor>(tensor));
+    }, "Check if tensor is scalar", py::arg("tensor"));
+
+    m.def("is_vector", [](TensorPtr tensor) {
+        return ggml_is_vector(as<ggml_tensor>(tensor));
+    }, "Check if tensor is vector", py::arg("tensor"));
+
+    m.def("is_matrix", [](TensorPtr tensor) {
+        return ggml_is_matrix(as<ggml_tensor>(tensor));
+    }, "Check if tensor is matrix", py::arg("tensor"));
+
+    m.def("is_3d", [](TensorPtr tensor) {
+        return ggml_is_3d(as<ggml_tensor>(tensor));
+    }, "Check if tensor is 3D", py::arg("tensor"));
+
+    m.def("is_empty", [](TensorPtr tensor) {
+        return ggml_is_empty(as<ggml_tensor>(tensor));
+    }, "Check if tensor is empty", py::arg("tensor"));
+
+    m.def("are_same_stride", [](TensorPtr a, TensorPtr b) {
+        return ggml_are_same_stride(as<ggml_tensor>(a), as<ggml_tensor>(b));
+    }, "Check if two tensors have the same stride", py::arg("a"), py::arg("b"));
+
+    m.def("can_repeat", [](TensorPtr a, TensorPtr b) {
+        return ggml_can_repeat(as<ggml_tensor>(a), as<ggml_tensor>(b));
+    }, "Check if tensor a can be repeated to shape of b", py::arg("a"), py::arg("b"));
+
+    m.def("nbytes_pad", [](TensorPtr tensor) {
+        return ggml_nbytes_pad(as<ggml_tensor>(tensor));
+    }, "Get padded tensor size in bytes", py::arg("tensor"));
+
+    m.def("row_size", [](ggml_type type, int64_t ne) {
+        return ggml_row_size(type, ne);
+    }, "Get row size in bytes", py::arg("type"), py::arg("ne"));
+
+    m.def("op_desc", [](TensorPtr tensor) {
+        return std::string(ggml_op_desc(as<ggml_tensor>(tensor)));
+    }, "Get operation description", py::arg("tensor"));
+
+    // Tensor value operations (from ggml-cpu.h)
+    m.def("new_f32", [](ContextPtr ctx, float value) {
+        return TensorPtr(ggml_new_f32(as<ggml_context>(ctx), value));
+    }, "Create scalar f32 tensor", py::arg("ctx"), py::arg("value"));
+
+    m.def("new_i32", [](ContextPtr ctx, int32_t value) {
+        return TensorPtr(ggml_new_i32(as<ggml_context>(ctx), value));
+    }, "Create scalar i32 tensor", py::arg("ctx"), py::arg("value"));
+
+    m.def("set_f32", [](TensorPtr tensor, float value) {
+        return TensorPtr(ggml_set_f32(as<ggml_tensor>(tensor), value));
+    }, "Set all elements to f32 value", py::arg("tensor"), py::arg("value"));
+
+    m.def("set_i32", [](TensorPtr tensor, int32_t value) {
+        return TensorPtr(ggml_set_i32(as<ggml_tensor>(tensor), value));
+    }, "Set all elements to i32 value", py::arg("tensor"), py::arg("value"));
+
+    m.def("set_zero", [](TensorPtr tensor) {
+        return TensorPtr(ggml_set_zero(as<ggml_tensor>(tensor)));
+    }, "Set all elements to zero", py::arg("tensor"));
+
+    m.def("get_f32_1d", [](TensorPtr tensor, int i) {
+        return ggml_get_f32_1d(as<ggml_tensor>(tensor), i);
+    }, "Get single f32 value", py::arg("tensor"), py::arg("i"));
+
+    m.def("set_f32_1d", [](TensorPtr tensor, int i, float value) {
+        ggml_set_f32_1d(as<ggml_tensor>(tensor), i, value);
+    }, "Set single f32 value", py::arg("tensor"), py::arg("i"), py::arg("value"));
+
+    m.def("get_i32_1d", [](TensorPtr tensor, int i) {
+        return ggml_get_i32_1d(as<ggml_tensor>(tensor), i);
+    }, "Get single i32 value", py::arg("tensor"), py::arg("i"));
+
+    m.def("set_i32_1d", [](TensorPtr tensor, int i, int32_t value) {
+        ggml_set_i32_1d(as<ggml_tensor>(tensor), i, value);
+    }, "Set single i32 value", py::arg("tensor"), py::arg("i"), py::arg("value"));
+
+    // Graph operations
+    m.def("graph_n_nodes", [](GraphPtr cgraph) {
+        return ggml_graph_n_nodes(as<ggml_cgraph>(cgraph));
+    }, "Get number of nodes in graph", py::arg("cgraph"));
+
+    m.def("graph_size", [](GraphPtr cgraph) {
+        return ggml_graph_size(as<ggml_cgraph>(cgraph));
+    }, "Get graph capacity", py::arg("cgraph"));
+
+    m.def("graph_print", [](GraphPtr cgraph) {
+        ggml_graph_print(as<ggml_cgraph>(cgraph));
+    }, "Print graph info", py::arg("cgraph"));
+
+    m.def("graph_dump_dot", [](GraphPtr gb, GraphPtr gf, const char* filename) {
+        ggml_graph_dump_dot(as<ggml_cgraph>(gb), as<ggml_cgraph>(gf), filename);
+    }, "Export graph to dot file", py::arg("gb"), py::arg("gf"), py::arg("filename"));
+
+    // Context info
+    m.def("used_mem", [](ContextPtr ctx) {
+        return ggml_used_mem(as<ggml_context>(ctx));
+    }, "Get used memory in context", py::arg("ctx"));
+
+    m.def("set_no_alloc", [](ContextPtr ctx, bool no_alloc) {
+        ggml_set_no_alloc(as<ggml_context>(ctx), no_alloc);
+    }, "Set no_alloc flag", py::arg("ctx"), py::arg("no_alloc"));
+
+    m.def("get_no_alloc", [](ContextPtr ctx) {
+        return ggml_get_no_alloc(as<ggml_context>(ctx));
+    }, "Get no_alloc flag", py::arg("ctx"));
+
+    m.def("get_first_tensor", [](ContextPtr ctx) {
+        return TensorPtr(ggml_get_first_tensor(as<ggml_context>(ctx)));
+    }, "Get first tensor in context", py::arg("ctx"));
+
+    m.def("get_next_tensor", [](ContextPtr ctx, TensorPtr tensor) {
+        return TensorPtr(ggml_get_next_tensor(as<ggml_context>(ctx), as<ggml_tensor>(tensor)));
+    }, "Get next tensor in context", py::arg("ctx"), py::arg("tensor"));
+
+    // GLU activations
+    m.def("swiglu", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_swiglu(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "SwiGLU activation", py::arg("ctx"), py::arg("a"));
+
+    m.def("reglu", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_reglu(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "ReGLU activation", py::arg("ctx"), py::arg("a"));
+
+    m.def("geglu", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_geglu(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "GEGLU activation", py::arg("ctx"), py::arg("a"));
+
+    // Parameter and loss marking
+    m.def("set_param", [](TensorPtr tensor) {
+        ggml_set_param(as<ggml_tensor>(tensor));
+    }, "Mark tensor as trainable parameter", py::arg("tensor"));
+
+    m.def("set_loss", [](TensorPtr tensor) {
+        ggml_set_loss(as<ggml_tensor>(tensor));
+    }, "Mark tensor as loss", py::arg("tensor"));
+
+    // Backend tensor operations
+    m.def("backend_tensor_copy", [](TensorPtr src, TensorPtr dst) {
+        ggml_backend_tensor_copy(as<ggml_tensor>(src), as<ggml_tensor>(dst));
+    }, "Copy tensor between backends", py::arg("src"), py::arg("dst"));
+
+    m.def("backend_tensor_memset", [](TensorPtr tensor, uint8_t value, size_t offset, size_t size) {
+        ggml_backend_tensor_memset(as<ggml_tensor>(tensor), value, offset, size);
+    }, "Fill tensor memory with value", py::arg("tensor"), py::arg("value"), py::arg("offset"), py::arg("size"));
 
     // GGUF functions
     m.def("gguf_init_from_file", [](const char* fname, bool no_alloc) {
