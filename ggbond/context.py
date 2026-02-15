@@ -13,12 +13,10 @@ class Context:
         self._ctx = ggml.context_init(size, no_alloc=no_alloc)
 
     @classmethod
-    def for_graph(
-        cls, max_nodes: int | None = None, *, grads: bool = False
+    def _for_graph(
+        cls, max_nodes: int, *, grads: bool = False
     ) -> Context:
-        """Create a context sized for holding a computation graph."""
-        if max_nodes is None:
-            max_nodes = ggml.DEFAULT_GRAPH_SIZE()
+        """Create a context sized for holding a computation graph (internal)."""
         size = (
             ggml.tensor_overhead() * max_nodes
             + ggml.graph_overhead_custom(max_nodes, grads)
@@ -55,12 +53,10 @@ class Context:
             ggml.set_name(t, name)
         return t
 
-    def new_graph(
-        self, max_nodes: int | None = None, *, grads: bool = False
+    def _new_graph(
+        self, max_nodes: int, *, grads: bool = False
     ) -> ggml.Graph:
-        """Create a computation graph inside this context."""
-        if max_nodes is None:
-            return ggml.new_graph(self._ctx)
+        """Create a computation graph inside this context (internal)."""
         return ggml.new_graph_custom(self._ctx, max_nodes, grads)
 
     # -- lifecycle ------------------------------------------------------------

@@ -405,14 +405,14 @@ class Tensor:
                 self._session.set(ggml_map[id(leaf)], leaf._data)
 
         # Phase 2: Build computation graph
-        ctx_graph = self._session.graph_context(max_nodes=n_graph_tensors)
+        g = self._session.graph(max_nodes=n_graph_tensors)
 
         # Materialize ops in topological order
         for node in ordered:
             if node._op is None:
                 continue
             ggml_inputs = [ggml_map[id(inp)] for inp in node._inputs]
-            ggml_result = _materialize_op(node._op, ctx_graph.raw, ggml_inputs, node._kwargs)
+            ggml_result = _materialize_op(node._op, g.ctx, ggml_inputs, node._kwargs)
             if node._name:
                 ggml.set_name(ggml_result, node._name)
             ggml_map[id(node)] = ggml_result
@@ -420,15 +420,13 @@ class Tensor:
         # Mark output and build graph
         result_ggml = ggml_map[id(self)]
         ggml.set_output(result_ggml)
-
-        graph = ctx_graph.new_graph(max_nodes=n_graph_tensors)
-        ggml.build_forward_expand(graph, result_ggml)
+        g.build_forward(result_ggml)
 
         # Phase 3: Reserve, execute, extract
-        self._session.reserve(graph)
-        self._session.run(graph)
+        self._session.reserve(g)
+        self._session.run(g)
 
-        out = self._session.get(graph, result_ggml)
+        out = self._session.get(g, result_ggml)
         self._cached = out
         return self
 
