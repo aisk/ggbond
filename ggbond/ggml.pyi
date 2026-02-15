@@ -81,6 +81,12 @@ class Type:
     F64: Type
     IQ1_M: Type
 
+class SortOrder:
+    """GGML sort order enumeration"""
+
+    ASC: SortOrder
+    DESC: SortOrder
+
 class OpPool:
     """GGML pooling operation enumeration"""
 
@@ -624,6 +630,252 @@ def gallocr_free(allocr: GAllocr) -> None:
 # Pooling operations
 def pool_1d(ctx: Context, a: Tensor, op: OpPool, k0: int, s0: int, p0: int) -> Tensor:
     """1D pooling (max or average)"""
+    ...
+
+def pool_2d(ctx: Context, a: Tensor, op: OpPool, k0: int, k1: int, s0: int, s1: int, p0: float, p1: float) -> Tensor:
+    """2D pooling (max or average)"""
+    ...
+
+# Attention-related operations
+def soft_max_ext(ctx: Context, a: Tensor, mask: Tensor, scale: float, max_bias: float) -> Tensor:
+    """Softmax with mask, scale and ALiBi bias"""
+    ...
+
+def diag_mask_zero(ctx: Context, a: Tensor, n_past: int) -> Tensor:
+    """Set elements above the diagonal to 0"""
+    ...
+
+def rope(ctx: Context, a: Tensor, b: Tensor, n_dims: int, mode: int) -> Tensor:
+    """Rotary position embedding"""
+    ...
+
+def rope_ext(
+    ctx: Context, a: Tensor, b: Tensor, c: Tensor,
+    n_dims: int, mode: int, n_ctx_orig: int,
+    freq_base: float, freq_scale: float,
+    ext_factor: float, attn_factor: float,
+    beta_fast: float, beta_slow: float,
+) -> Tensor:
+    """Extended rotary position embedding"""
+    ...
+
+def flash_attn_ext(
+    ctx: Context, q: Tensor, k: Tensor, v: Tensor, mask: Tensor,
+    scale: float, max_bias: float, logit_softcap: float,
+) -> Tensor:
+    """Flash Attention"""
+    ...
+
+# Convolution operations
+def conv_1d(ctx: Context, a: Tensor, b: Tensor, s0: int, p0: int, d0: int) -> Tensor:
+    """1D convolution"""
+    ...
+
+def conv_2d(
+    ctx: Context, a: Tensor, b: Tensor,
+    s0: int, s1: int, p0: int, p1: int, d0: int, d1: int,
+) -> Tensor:
+    """2D convolution"""
+    ...
+
+# Tensor operations
+def dup(ctx: Context, a: Tensor) -> Tensor:
+    """Duplicate tensor"""
+    ...
+
+def dup_tensor(ctx: Context, src: Tensor) -> Tensor:
+    """Duplicate tensor structure (without data)"""
+    ...
+
+def view_tensor(ctx: Context, src: Tensor) -> Tensor:
+    """Create a view of tensor"""
+    ...
+
+def cast(ctx: Context, a: Tensor, type: Type) -> Tensor:
+    """Cast tensor to different type"""
+    ...
+
+def pad(ctx: Context, a: Tensor, p0: int, p1: int, p2: int, p3: int) -> Tensor:
+    """Pad tensor with zeros"""
+    ...
+
+def arange(ctx: Context, start: float, stop: float, step: float) -> Tensor:
+    """Create range tensor"""
+    ...
+
+def argsort(ctx: Context, a: Tensor, order: SortOrder) -> Tensor:
+    """Get sorted indices"""
+    ...
+
+def top_k(ctx: Context, a: Tensor, k: int) -> Tensor:
+    """Top-K elements per row"""
+    ...
+
+def diag(ctx: Context, a: Tensor) -> Tensor:
+    """Create diagonal matrix"""
+    ...
+
+def repeat_4d(ctx: Context, a: Tensor, ne0: int, ne1: int, ne2: int, ne3: int) -> Tensor:
+    """Repeat tensor to specified shape"""
+    ...
+
+def set_rows(ctx: Context, a: Tensor, b: Tensor, c: Tensor) -> Tensor:
+    """Set rows by index (a: dest, b: src rows, c: indices)"""
+    ...
+
+def scale_bias(ctx: Context, a: Tensor, s: float, b: float) -> Tensor:
+    """Scale and bias: x = s*a + b"""
+    ...
+
+def cross_entropy_loss(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """Cross entropy loss (a: logits, b: labels)"""
+    ...
+
+# Tensor property queries
+def is_scalar(tensor: Tensor) -> bool:
+    """Check if tensor is scalar"""
+    ...
+
+def is_vector(tensor: Tensor) -> bool:
+    """Check if tensor is vector"""
+    ...
+
+def is_matrix(tensor: Tensor) -> bool:
+    """Check if tensor is matrix"""
+    ...
+
+def is_3d(tensor: Tensor) -> bool:
+    """Check if tensor is 3D"""
+    ...
+
+def is_empty(tensor: Tensor) -> bool:
+    """Check if tensor is empty"""
+    ...
+
+def are_same_stride(a: Tensor, b: Tensor) -> bool:
+    """Check if two tensors have the same stride"""
+    ...
+
+def can_repeat(a: Tensor, b: Tensor) -> bool:
+    """Check if tensor a can be repeated to shape of b"""
+    ...
+
+def nbytes_pad(tensor: Tensor) -> int:
+    """Get padded tensor size in bytes"""
+    ...
+
+def row_size(type: Type, ne: int) -> int:
+    """Get row size in bytes"""
+    ...
+
+def op_desc(tensor: Tensor) -> str:
+    """Get operation description"""
+    ...
+
+# Tensor value operations (from ggml-cpu.h)
+def new_f32(ctx: Context, value: float) -> Tensor:
+    """Create scalar f32 tensor"""
+    ...
+
+def new_i32(ctx: Context, value: int) -> Tensor:
+    """Create scalar i32 tensor"""
+    ...
+
+def set_f32(tensor: Tensor, value: float) -> Tensor:
+    """Set all elements to f32 value"""
+    ...
+
+def set_i32(tensor: Tensor, value: int) -> Tensor:
+    """Set all elements to i32 value"""
+    ...
+
+def set_zero(tensor: Tensor) -> Tensor:
+    """Set all elements to zero"""
+    ...
+
+def get_f32_1d(tensor: Tensor, i: int) -> float:
+    """Get single f32 value"""
+    ...
+
+def set_f32_1d(tensor: Tensor, i: int, value: float) -> None:
+    """Set single f32 value"""
+    ...
+
+def get_i32_1d(tensor: Tensor, i: int) -> int:
+    """Get single i32 value"""
+    ...
+
+def set_i32_1d(tensor: Tensor, i: int, value: int) -> None:
+    """Set single i32 value"""
+    ...
+
+# Graph operations
+def graph_n_nodes(cgraph: Graph) -> int:
+    """Get number of nodes in graph"""
+    ...
+
+def graph_size(cgraph: Graph) -> int:
+    """Get graph capacity"""
+    ...
+
+def graph_print(cgraph: Graph) -> None:
+    """Print graph info"""
+    ...
+
+def graph_dump_dot(gb: Graph, gf: Graph, filename: str) -> None:
+    """Export graph to dot file"""
+    ...
+
+# Context info
+def used_mem(ctx: Context) -> int:
+    """Get used memory in context"""
+    ...
+
+def set_no_alloc(ctx: Context, no_alloc: bool) -> None:
+    """Set no_alloc flag"""
+    ...
+
+def get_no_alloc(ctx: Context) -> bool:
+    """Get no_alloc flag"""
+    ...
+
+def get_first_tensor(ctx: Context) -> Tensor:
+    """Get first tensor in context"""
+    ...
+
+def get_next_tensor(ctx: Context, tensor: Tensor) -> Tensor:
+    """Get next tensor in context"""
+    ...
+
+# GLU activations
+def swiglu(ctx: Context, a: Tensor) -> Tensor:
+    """SwiGLU activation"""
+    ...
+
+def reglu(ctx: Context, a: Tensor) -> Tensor:
+    """ReGLU activation"""
+    ...
+
+def geglu(ctx: Context, a: Tensor) -> Tensor:
+    """GEGLU activation"""
+    ...
+
+# Parameter and loss marking
+def set_param(tensor: Tensor) -> None:
+    """Mark tensor as trainable parameter"""
+    ...
+
+def set_loss(tensor: Tensor) -> None:
+    """Mark tensor as loss"""
+    ...
+
+# Backend tensor operations
+def backend_tensor_copy(src: Tensor, dst: Tensor) -> None:
+    """Copy tensor between backends"""
+    ...
+
+def backend_tensor_memset(tensor: Tensor, value: int, offset: int, size: int) -> None:
+    """Fill tensor memory with value"""
     ...
 
 # GGUF functions
