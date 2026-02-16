@@ -3,7 +3,7 @@ import sys
 
 import numpy as np
 
-from ggbond import Tensor, ggml
+import ggbond
 
 
 def main():
@@ -20,8 +20,8 @@ def main():
         if opt in ("-b", "--backend"):
             backend_type = arg.lower()
 
-    ggml.time_init()
-    ggml.log_set_default()
+    ggbond.ggml.time_init()
+    ggbond.ggml.log_set_default()
 
     matrix_a = np.array([
         [2, 8],
@@ -36,13 +36,16 @@ def main():
         [5, 4]
     ], dtype=np.float32)
 
-    a = Tensor(data=matrix_a)
-    b = Tensor(data=matrix_b)
-    result = (a @ b).numpy(backend=backend_type)
+    s = ggbond.Session(backend_type)
+    a = s.tensor(matrix_a)
+    b = s.tensor(matrix_b)
+    result = (a @ b).numpy()
 
     rows, cols = result.shape
     print(f"mul mat ({cols} x {rows}):")
     print(result)
+
+    s.close()
 
 
 if __name__ == "__main__":

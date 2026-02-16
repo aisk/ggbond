@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from ggbond import Tensor, ggml
+from ggbond import Tensor, ggml, Session
 
 
 def main():
@@ -22,9 +22,11 @@ def main():
         [5, 4],
     ], dtype=np.float32)
 
+    s = Session("metal")
+
     # --- basic matrix multiplication ---
-    a = Tensor(data=matrix_a)
-    b = Tensor(data=matrix_b)
+    a = s.tensor(data=matrix_a)
+    b = s.tensor(data=matrix_b)
     result = (a @ b).numpy()
 
     print("Tensor API — a @ b:")
@@ -39,8 +41,8 @@ def main():
     print("✓ results match\n")
 
     # --- chained operations ---
-    a = Tensor(data=matrix_a)
-    b = Tensor(data=matrix_b)
+    a = s.tensor(data=matrix_a)
+    b = s.tensor(data=matrix_b)
     result = (a @ b).relu().numpy()
     print("(a @ b).relu():")
     print(result)
@@ -48,7 +50,7 @@ def main():
     print("✓ relu correct\n")
 
     # --- scalar operations ---
-    a = Tensor(data=matrix_a)
+    a = s.tensor(data=matrix_a)
     scaled = (a * 2.0).numpy()
     print("a * 2.0:")
     print(scaled)
@@ -56,8 +58,8 @@ def main():
     print("✓ scalar multiply correct\n")
 
     # --- arithmetic chain ---
-    a = Tensor(data=np.array([[1, 2], [3, 4]], dtype=np.float32))
-    b = Tensor(data=np.array([[5, 6], [7, 8]], dtype=np.float32))
+    a = s.tensor(data=np.array([[1, 2], [3, 4]], dtype=np.float32))
+    b = s.tensor(data=np.array([[5, 6], [7, 8]], dtype=np.float32))
     result = (a + b).numpy()
     print("a + b:")
     print(result)
@@ -66,6 +68,7 @@ def main():
     print("✓ element-wise add correct\n")
 
     print("All tests passed!")
+    s.close()
 
 
 if __name__ == "__main__":

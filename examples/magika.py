@@ -1,4 +1,4 @@
-"""Magika file type detector using ggbond Session API.
+"""Magika file type detector using ggbond Tensor API.
 
 Usage:
     python examples/magika.py <model.gguf> <file1> [file2 ...] [--backend cpu|metal]
@@ -64,7 +64,7 @@ class Magika:
 
     def __init__(self, model_path: str, *, backend: str = "cpu"):
         self._session = ggbond.Session(backend)
-        _, self._tensors = self._session.load_gguf(model_path)
+        self._weights = self._session.load_gguf(model_path)
 
     def predict(self, files: list[str], *, top_k: int = 5) -> list[list[Prediction]]:
         """Predict file types for a list of files.
@@ -72,14 +72,35 @@ class Magika:
         Returns a list of top-k predictions per file.
         """
         n_files = len(files)
-        g = self._build_graph(n_files)
+        input_data = np.concatenate([self._preprocess_file(f) for f in files])
+        inp = self._session.tensor(input_data.reshape(n_files, self.INP_BYTES, 257))
+        w = self._weights
 
-        inputs = np.concatenate([self._preprocess_file(f) for f in files])
-        self._session.reserve(g)
-        self._session.run(g, inputs={"input": inputs})
+        # dense
+        cur = (inp @ w["dense/kernel:0"] + w["dense/bias:0"]).gelu()
 
-        all_probs = self._session.get(g, "target_label_probs")
-        all_probs = all_probs.reshape(n_files, self.N_LABEL)
+        # reshape + transpose
+        cur = cur.reshape(512, 384, n_files).transpose().cont()
+
+        # layer normalization
+        cur = cur.norm(eps=self.F_NORM_EPS) * w["layer_normalization/gamma:0"] + w["layer_normalization/beta:0"]
+
+        # dense_1
+        cur = (cur.transpose().cont() @ w["dense_1/kernel:0"] + w["dense_1/bias:0"]).gelu()
+
+        # dense_2
+        cur = (cur @ w["dense_2/kernel:0"] + w["dense_2/bias:0"]).gelu()
+
+        # global_max_pooling1d
+        cur = cur.transpose().cont().pool_1d(ggml.OpPool.MAX, 384, 384).reshape(256, n_files)
+
+        # layer normalization 1
+        cur = cur.norm(eps=self.F_NORM_EPS) * w["layer_normalization_1/gamma:0"] + w["layer_normalization_1/beta:0"]
+
+        # target_label
+        cur = (cur @ w["target_label/kernel:0"] + w["target_label/bias:0"]).softmax()
+
+        all_probs = cur.numpy().reshape(n_files, self.N_LABEL)
 
         results = []
         for probs in all_probs:
@@ -97,59 +118,6 @@ class Magika:
 
     def __exit__(self, *exc):
         self.close()
-
-    def _build_graph(self, n_files: int):
-        """Build computation graph for the magika model."""
-        g = ggbond.Graph()
-        tensors = self._tensors
-
-        inp = g.new_tensor(ggml.Type.F32, 257, self.INP_BYTES, n_files, name="input")
-        ggml.set_input(inp)
-
-        # dense
-        cur = g.mul_mat(tensors["dense/kernel:0"], inp)
-        cur = g.add(cur, tensors["dense/bias:0"])
-        cur = g.gelu(cur)
-
-        # reshape
-        cur = g.reshape(cur, 512, 384, n_files)
-        cur = g.cont(g.transpose(cur))
-
-        # layer normalization
-        cur = g.norm(cur, self.F_NORM_EPS)
-        cur = g.mul(cur, tensors["layer_normalization/gamma:0"])
-        cur = g.add(cur, tensors["layer_normalization/beta:0"])
-
-        # dense_1
-        cur = g.cont(g.transpose(cur))
-        cur = g.mul_mat(tensors["dense_1/kernel:0"], cur)
-        cur = g.add(cur, tensors["dense_1/bias:0"])
-        cur = g.gelu(cur)
-
-        # dense_2
-        cur = g.mul_mat(tensors["dense_2/kernel:0"], cur)
-        cur = g.add(cur, tensors["dense_2/bias:0"])
-        cur = g.gelu(cur)
-
-        # global_max_pooling1d
-        cur = g.cont(g.transpose(cur))
-        cur = ggml.pool_1d(g.ctx, cur, ggml.OpPool.MAX, 384, 384, 0)
-        cur = g.reshape(cur, 256, n_files)
-
-        # layer normalization 1
-        cur = g.norm(cur, self.F_NORM_EPS)
-        cur = g.mul(cur, tensors["layer_normalization_1/gamma:0"])
-        cur = g.add(cur, tensors["layer_normalization_1/beta:0"])
-
-        # target_label
-        cur = g.mul_mat(tensors["target_label/kernel:0"], cur)
-        cur = g.add(cur, tensors["target_label/bias:0"])
-        cur = g.soft_max(cur)
-        ggml.set_name(cur, "target_label_probs")
-        ggml.set_output(cur)
-
-        g.build_forward(cur)
-        return g
 
     @staticmethod
     def _read_segment(f, offset: int, size: int) -> np.ndarray:
