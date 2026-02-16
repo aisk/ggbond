@@ -4,7 +4,7 @@ GPT-2 inference using ggbond Session API.
 Ported from vendor/ggml/examples/gpt-2/main-backend.cpp
 
 Usage:
-    python examples/ggbond_gpt2.py -m models/gpt-2-117M/ggml-model-f32.bin -p "Hello, world"
+    python examples/gpt2.py -m models/gpt-2-117M/ggml-model-f32.bin -p "Hello, world"
 
 Download model:
     cd vendor/ggml
@@ -23,6 +23,7 @@ import numpy as np
 
 import ggbond
 from ggbond import ggml
+from ggbond.graph import GAllocr, Graph
 
 GPT2_MAX_NODES = 4096
 
@@ -148,7 +149,6 @@ class GPT2Model:
         self.layers: list[GPT2Layer] = []
         self.memory_k = None
         self.memory_v = None
-        self.tensors: dict[str, object] = {}
 
 
 # ============================================================================
@@ -156,7 +156,7 @@ class GPT2Model:
 # ============================================================================
 
 def gpt2_model_load(
-    fname: str, model: GPT2Model, session: ggbond.Session, n_ctx: int, n_gpu_layers: int
+    fname: str, model: GPT2Model, session: ggbond.Session, n_ctx: int
 ) -> tuple[dict[str, int], dict[int, str]]:
     """Load GPT-2 model from binary file. Returns (token_to_id, id_to_token)."""
     print(f"gpt2_model_load: loading model from '{fname}'")
@@ -202,85 +202,34 @@ def gpt2_model_load(
 
         wtype = ggml.Type(ggml.ftype_to_ggml_type(hp.ftype))
 
-        n_tensors = 2 + 6 + 12 * hp.n_layer
-        ctx_w = session.context(n_tensors=n_tensors)
-
         n_embd = hp.n_embd
         n_layer = hp.n_layer
 
-        model.ln_f_g = ctx_w.new_tensor(ggml.Type.F32, n_embd)
-        model.ln_f_b = ctx_w.new_tensor(ggml.Type.F32, n_embd)
+        # Build a name→(dtype, shape) map for all expected tensors
+        tensor_info: dict[str, tuple] = {}
+        tensor_info["model/ln_f/g"] = (ggml.Type.F32, (n_embd,))
+        tensor_info["model/ln_f/b"] = (ggml.Type.F32, (n_embd,))
+        tensor_info["model/wte"] = (wtype, (n_embd, hp.n_vocab))
+        tensor_info["model/wpe"] = (ggml.Type.F32, (n_embd, hp.n_ctx))
+        tensor_info["model/lm_head"] = (wtype, (n_embd, hp.n_vocab))
 
-        model.wte = ctx_w.new_tensor(wtype, n_embd, hp.n_vocab)
-        model.wpe = ctx_w.new_tensor(ggml.Type.F32, n_embd, hp.n_ctx)
-        model.lm_head = ctx_w.new_tensor(wtype, n_embd, hp.n_vocab)
-
-        model.tensors["model/ln_f/g"] = model.ln_f_g
-        model.tensors["model/ln_f/b"] = model.ln_f_b
-        model.tensors["model/wte"] = model.wte
-        model.tensors["model/wpe"] = model.wpe
-        model.tensors["model/lm_head"] = model.lm_head
-
-        model.layers = []
         for i in range(n_layer):
-            layer = GPT2Layer()
-
-            layer.ln_1_g = ctx_w.new_tensor(ggml.Type.F32, n_embd)
-            layer.ln_1_b = ctx_w.new_tensor(ggml.Type.F32, n_embd)
-            layer.ln_2_g = ctx_w.new_tensor(ggml.Type.F32, n_embd)
-            layer.ln_2_b = ctx_w.new_tensor(ggml.Type.F32, n_embd)
-
-            layer.c_attn_attn_w = ctx_w.new_tensor(wtype, n_embd, 3 * n_embd)
-            layer.c_attn_attn_b = ctx_w.new_tensor(ggml.Type.F32, 3 * n_embd)
-            layer.c_attn_proj_w = ctx_w.new_tensor(wtype, n_embd, n_embd)
-            layer.c_attn_proj_b = ctx_w.new_tensor(ggml.Type.F32, n_embd)
-
-            layer.c_mlp_fc_w = ctx_w.new_tensor(wtype, n_embd, 4 * n_embd)
-            layer.c_mlp_fc_b = ctx_w.new_tensor(ggml.Type.F32, 4 * n_embd)
-            layer.c_mlp_proj_w = ctx_w.new_tensor(wtype, 4 * n_embd, n_embd)
-            layer.c_mlp_proj_b = ctx_w.new_tensor(ggml.Type.F32, n_embd)
-
-            model.layers.append(layer)
-
             prefix = f"model/h{i}"
-            model.tensors[f"{prefix}/ln_1/g"] = layer.ln_1_g
-            model.tensors[f"{prefix}/ln_1/b"] = layer.ln_1_b
-            model.tensors[f"{prefix}/ln_2/g"] = layer.ln_2_g
-            model.tensors[f"{prefix}/ln_2/b"] = layer.ln_2_b
-            model.tensors[f"{prefix}/attn/c_attn/w"] = layer.c_attn_attn_w
-            model.tensors[f"{prefix}/attn/c_attn/b"] = layer.c_attn_attn_b
-            model.tensors[f"{prefix}/attn/c_proj/w"] = layer.c_attn_proj_w
-            model.tensors[f"{prefix}/attn/c_proj/b"] = layer.c_attn_proj_b
-            model.tensors[f"{prefix}/mlp/c_fc/w"] = layer.c_mlp_fc_w
-            model.tensors[f"{prefix}/mlp/c_fc/b"] = layer.c_mlp_fc_b
-            model.tensors[f"{prefix}/mlp/c_proj/w"] = layer.c_mlp_proj_w
-            model.tensors[f"{prefix}/mlp/c_proj/b"] = layer.c_mlp_proj_b
+            tensor_info[f"{prefix}/ln_1/g"] = (ggml.Type.F32, (n_embd,))
+            tensor_info[f"{prefix}/ln_1/b"] = (ggml.Type.F32, (n_embd,))
+            tensor_info[f"{prefix}/ln_2/g"] = (ggml.Type.F32, (n_embd,))
+            tensor_info[f"{prefix}/ln_2/b"] = (ggml.Type.F32, (n_embd,))
+            tensor_info[f"{prefix}/attn/c_attn/w"] = (wtype, (n_embd, 3 * n_embd))
+            tensor_info[f"{prefix}/attn/c_attn/b"] = (ggml.Type.F32, (3 * n_embd,))
+            tensor_info[f"{prefix}/attn/c_proj/w"] = (wtype, (n_embd, n_embd))
+            tensor_info[f"{prefix}/attn/c_proj/b"] = (ggml.Type.F32, (n_embd,))
+            tensor_info[f"{prefix}/mlp/c_fc/w"] = (wtype, (n_embd, 4 * n_embd))
+            tensor_info[f"{prefix}/mlp/c_fc/b"] = (ggml.Type.F32, (4 * n_embd,))
+            tensor_info[f"{prefix}/mlp/c_proj/w"] = (wtype, (4 * n_embd, n_embd))
+            tensor_info[f"{prefix}/mlp/c_proj/b"] = (ggml.Type.F32, (n_embd,))
 
-        buffer_w = session.alloc(ctx_w)
-
-        print(
-            f"gpt2_model_load: backend buffer size = "
-            f"{ggml.backend_buffer_get_size(buffer_w) / 1024 / 1024:.2f} MB"
-        )
-
-        model.hparams.n_ctx = n_ctx
-
-        ctx_kv = session.context(n_tensors=2)
-
-        n_mem = n_layer * n_ctx
-        n_elements = n_embd * n_mem
-
-        model.memory_k = ctx_kv.new_tensor(ggml.Type.F32, n_elements)
-        model.memory_v = ctx_kv.new_tensor(ggml.Type.F32, n_elements)
-
-        buffer_kv = session.alloc(ctx_kv)
-
-        memory_size = ggml.backend_buffer_get_size(buffer_kv)
-        print(
-            f"gpt2_model_load: memory size = {memory_size / 1024 / 1024:.2f} MB, "
-            f"n_mem = {n_mem}"
-        )
-
+        # Read weights from file and create tensors via session.tensor()
+        tensors: dict[str, ggbond.Tensor] = {}
         total_size = 0
         has_lm_head = False
 
@@ -297,18 +246,26 @@ def gpt2_model_load(
 
             name = f.read(length).decode("utf-8")
 
-            if name not in model.tensors:
+            if name not in tensor_info:
                 raise ValueError(f"unknown tensor '{name}' in model file")
 
-            tensor = model.tensors[name]
-            ggml.set_name(tensor, name)
+            dtype, shape = tensor_info[name]
 
-            n_bytes = ggml.nbytes(tensor)
-            data = np.frombuffer(f.read(n_bytes), dtype=np.uint8)
-            ggml.backend_tensor_set(tensor, data, 0, n_bytes)
+            # Calculate byte count from ggml type info
+            # For quantized types we read raw bytes; for native types use numpy
+            type_size = ggml.type_size(ggml.Type(ttype))
+            block_size = ggml.blck_size(ggml.Type(ttype))
+            n_elements = 1
+            for d in range(n_dims):
+                n_elements *= ne[d]
+            n_bytes = n_elements * type_size // block_size
+
+            raw_data = f.read(n_bytes)
+            t = session.tensor(raw_data, dtype=dtype, shape=shape, name=name)
+            tensors[name] = t
 
             if name == "model/wte" and not has_lm_head:
-                model.lm_head = tensor
+                tensors["model/lm_head"] = t
 
             if name == "model/lm_head":
                 has_lm_head = True
@@ -317,12 +274,51 @@ def gpt2_model_load(
 
         print(f"gpt2_model_load: model size  = {total_size / 1024 / 1024:.2f} MB")
 
+        # Override n_ctx
+        model.hparams.n_ctx = n_ctx
+
+        # Assign model weight references
+        model.ln_f_g = tensors["model/ln_f/g"]
+        model.ln_f_b = tensors["model/ln_f/b"]
+        model.wte = tensors["model/wte"]
+        model.wpe = tensors["model/wpe"]
+        model.lm_head = tensors["model/lm_head"]
+
+        model.layers = []
+        for i in range(n_layer):
+            layer = GPT2Layer()
+            prefix = f"model/h{i}"
+            layer.ln_1_g = tensors[f"{prefix}/ln_1/g"]
+            layer.ln_1_b = tensors[f"{prefix}/ln_1/b"]
+            layer.ln_2_g = tensors[f"{prefix}/ln_2/g"]
+            layer.ln_2_b = tensors[f"{prefix}/ln_2/b"]
+            layer.c_attn_attn_w = tensors[f"{prefix}/attn/c_attn/w"]
+            layer.c_attn_attn_b = tensors[f"{prefix}/attn/c_attn/b"]
+            layer.c_attn_proj_w = tensors[f"{prefix}/attn/c_proj/w"]
+            layer.c_attn_proj_b = tensors[f"{prefix}/attn/c_proj/b"]
+            layer.c_mlp_fc_w = tensors[f"{prefix}/mlp/c_fc/w"]
+            layer.c_mlp_fc_b = tensors[f"{prefix}/mlp/c_fc/b"]
+            layer.c_mlp_proj_w = tensors[f"{prefix}/mlp/c_proj/w"]
+            layer.c_mlp_proj_b = tensors[f"{prefix}/mlp/c_proj/b"]
+            model.layers.append(layer)
+
+        # Allocate KV cache
+        n_mem = n_layer * n_ctx
+        n_elements = n_embd * n_mem
+        model.memory_k = session.empty(ggml.Type.F32, n_elements, name="memory_k")
+        model.memory_v = session.empty(ggml.Type.F32, n_elements, name="memory_v")
+
     return token_to_id, id_to_token
 
 
 # ============================================================================
 # Graph building
 # ============================================================================
+
+def _t(tensor):
+    """Extract the underlying ggml.Tensor pointer from a high-level Tensor."""
+    return tensor._ggml_tensor
+
 
 def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
     """Build the GPT-2 computation graph."""
@@ -333,7 +329,7 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
     n_ctx = hp.n_ctx
     n_head = hp.n_head
 
-    g = ggbond.Graph(max_nodes=GPT2_MAX_NODES)
+    g = Graph(max_nodes=GPT2_MAX_NODES)
 
     embd = g.new_tensor(ggml.Type.I32, N, name="embd")
     ggml.set_input(embd)
@@ -343,48 +339,46 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
 
     # wte + wpe
     inpL = g.add(
-        ggml.get_rows(g.ctx, model.wte, embd),
-        ggml.get_rows(g.ctx, model.wpe, position),
+        g.get_rows(_t(model.wte), embd),
+        g.get_rows(_t(model.wpe), position),
     )
 
     for il in range(n_layer):
         layer = model.layers[il]
 
         cur = g.norm(inpL, hp.eps)
-        cur = g.add(g.mul(cur, layer.ln_1_g), layer.ln_1_b)
+        cur = g.add(g.mul(cur, _t(layer.ln_1_g)), _t(layer.ln_1_b))
 
-        cur = g.mul_mat(layer.c_attn_attn_w, cur)
-        cur = g.add(cur, layer.c_attn_attn_b)
+        cur = g.mul_mat(_t(layer.c_attn_attn_w), cur)
+        cur = g.add(cur, _t(layer.c_attn_attn_b))
 
         nb1 = ggml.tensor_nb(cur, 1)
-        Qcur = ggml.view_2d(g.ctx, cur, n_embd, N, nb1, 0 * 4 * n_embd)
-        Kcur = ggml.view_2d(g.ctx, cur, n_embd, N, nb1, 1 * 4 * n_embd)
-        Vcur = ggml.view_2d(g.ctx, cur, n_embd, N, nb1, 2 * 4 * n_embd)
+        Qcur = g.view_2d(cur, n_embd, N, nb1, 0 * 4 * n_embd)
+        Kcur = g.view_2d(cur, n_embd, N, nb1, 1 * 4 * n_embd)
+        Vcur = g.view_2d(cur, n_embd, N, nb1, 2 * 4 * n_embd)
 
         if N >= 1:
-            k = ggml.view_1d(
-                g.ctx, model.memory_k, N * n_embd,
-                ggml.element_size(model.memory_k) * n_embd * (il * n_ctx + n_past),
+            k = g.view_1d(
+                _t(model.memory_k), N * n_embd,
+                ggml.element_size(_t(model.memory_k)) * n_embd * (il * n_ctx + n_past),
             )
-            v = ggml.view_1d(
-                g.ctx, model.memory_v, N * n_embd,
-                ggml.element_size(model.memory_v) * n_embd * (il * n_ctx + n_past),
+            v = g.view_1d(
+                _t(model.memory_v), N * n_embd,
+                ggml.element_size(_t(model.memory_v)) * n_embd * (il * n_ctx + n_past),
             )
-            g.build_forward(ggml.cpy(g.ctx, Kcur, k))
-            g.build_forward(ggml.cpy(g.ctx, Vcur, v))
+            g.build_forward(g.cpy(Kcur, k))
+            g.build_forward(g.cpy(Vcur, v))
 
-        Q = ggml.permute(
-            g.ctx,
-            ggml.cont_3d(g.ctx, Qcur, n_embd // n_head, n_head, N),
+        Q = g.permute(
+            g.cont_3d(Qcur, n_embd // n_head, n_head, N),
             0, 2, 1, 3,
         )
 
-        K = ggml.permute(
-            g.ctx,
+        K = g.permute(
             g.reshape(
-                ggml.view_1d(
-                    g.ctx, model.memory_k, (n_past + N) * n_embd,
-                    il * n_ctx * ggml.element_size(model.memory_k) * n_embd,
+                g.view_1d(
+                    _t(model.memory_k), (n_past + N) * n_embd,
+                    il * n_ctx * ggml.element_size(_t(model.memory_k)) * n_embd,
                 ),
                 n_embd // n_head, n_head, n_past + N,
             ),
@@ -393,17 +387,15 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
 
         KQ = g.mul_mat(K, Q)
         KQ_scaled = g.scale(KQ, 1.0 / math.sqrt(n_embd / n_head))
-        KQ_masked = ggml.diag_mask_inf(g.ctx, KQ_scaled, n_past)
+        KQ_masked = g.diag_mask_inf(KQ_scaled, n_past)
         KQ_soft_max = g.soft_max(KQ_masked)
 
-        V_trans = ggml.cont_3d(
-            g.ctx,
-            ggml.permute(
-                g.ctx,
+        V_trans = g.cont_3d(
+            g.permute(
                 g.reshape(
-                    ggml.view_1d(
-                        g.ctx, model.memory_v, (n_past + N) * n_embd,
-                        il * n_ctx * ggml.element_size(model.memory_v) * n_embd,
+                    g.view_1d(
+                        _t(model.memory_v), (n_past + N) * n_embd,
+                        il * n_ctx * ggml.element_size(_t(model.memory_v)) * n_embd,
                     ),
                     n_embd // n_head, n_head, n_past + N,
                 ),
@@ -413,33 +405,33 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
         )
 
         KQV = g.mul_mat(V_trans, KQ_soft_max)
-        KQV_merged = ggml.permute(g.ctx, KQV, 0, 2, 1, 3)
-        cur = ggml.cont_2d(g.ctx, KQV_merged, n_embd, N)
+        KQV_merged = g.permute(KQV, 0, 2, 1, 3)
+        cur = g.cont_2d(KQV_merged, n_embd, N)
 
-        cur = g.mul_mat(layer.c_attn_proj_w, cur)
-        cur = g.add(cur, layer.c_attn_proj_b)
+        cur = g.mul_mat(_t(layer.c_attn_proj_w), cur)
+        cur = g.add(cur, _t(layer.c_attn_proj_b))
 
         cur = g.add(cur, inpL)
 
         inpFF = cur
 
         cur = g.norm(inpFF, hp.eps)
-        cur = g.add(g.mul(cur, layer.ln_2_g), layer.ln_2_b)
+        cur = g.add(g.mul(cur, _t(layer.ln_2_g)), _t(layer.ln_2_b))
 
-        cur = g.mul_mat(layer.c_mlp_fc_w, cur)
-        cur = g.add(cur, layer.c_mlp_fc_b)
+        cur = g.mul_mat(_t(layer.c_mlp_fc_w), cur)
+        cur = g.add(cur, _t(layer.c_mlp_fc_b))
 
         cur = g.gelu(cur)
 
-        cur = g.mul_mat(layer.c_mlp_proj_w, cur)
-        cur = g.add(cur, layer.c_mlp_proj_b)
+        cur = g.mul_mat(_t(layer.c_mlp_proj_w), cur)
+        cur = g.add(cur, _t(layer.c_mlp_proj_b))
 
         inpL = g.add(cur, inpFF)
 
     inpL = g.norm(inpL, hp.eps)
-    inpL = g.add(g.mul(inpL, model.ln_f_g), model.ln_f_b)
+    inpL = g.add(g.mul(inpL, _t(model.ln_f_g)), _t(model.ln_f_b))
 
-    inpL = g.mul_mat(model.lm_head, inpL)
+    inpL = g.mul_mat(_t(model.lm_head), inpL)
     ggml.set_name(inpL, "logits")
     ggml.set_output(inpL)
 
@@ -455,7 +447,6 @@ def gpt2_graph(model: GPT2Model, n_past: int, n_tokens: int):
 def gpt2_eval(
     model: GPT2Model,
     session: ggbond.Session,
-    n_threads: int,
     n_past: int,
     embd_inp: list[int],
 ) -> np.ndarray:
@@ -465,13 +456,25 @@ def gpt2_eval(
 
     g = gpt2_graph(model, n_past, N)
 
-    session.run(g, inputs={
-        "embd": np.array(embd_inp, dtype=np.int32),
-        "position": np.arange(n_past, n_past + N, dtype=np.int32),
-    })
+    allocr = GAllocr(session.backend)
+    allocr.reserve(g.raw)
+    allocr.alloc(g.raw)
 
-    logits = session.get_slice(g, "logits",
-                               offset=n_vocab * (N - 1) * 4, count=n_vocab)
+    embd_data = np.array(embd_inp, dtype=np.int32)
+    pos_data = np.arange(n_past, n_past + N, dtype=np.int32)
+
+    session.backend.tensor_set(ggml.graph_get_tensor(g.raw, "embd"), embd_data)
+    session.backend.tensor_set(ggml.graph_get_tensor(g.raw, "position"), pos_data)
+
+    session.backend.compute(g.raw)
+
+    logits_t = ggml.graph_get_tensor(g.raw, "logits")
+    logits = session.backend.tensor_get_slice(
+        logits_t, n_vocab * (N - 1) * 4, n_vocab,
+    )
+
+    allocr.close()
+    g.close()
 
     return logits
 
@@ -496,7 +499,6 @@ def main():
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p sampling")
     parser.add_argument("--temp", type=float, default=1.0, help="Temperature")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed (-1 for random)")
-    parser.add_argument("--n-gpu-layers", type=int, default=0, help="Number of layers to offload to GPU")
     args = parser.parse_args()
 
     ggml.time_init()
@@ -512,21 +514,9 @@ def main():
 
     with ggbond.Session("cpu", n_threads=args.threads) as s:
         token_to_id, id_to_token = gpt2_model_load(
-            args.model, model, s, args.n_ctx, args.n_gpu_layers
+            args.model, model, s, args.n_ctx
         )
         t_load_us = ggml.time_us() - t_start_us
-
-        # Reserve memory for worst case
-        n_tokens = min(model.hparams.n_ctx, args.n_batch)
-        n_past_worst = model.hparams.n_ctx - n_tokens
-        g_worst = gpt2_graph(model, n_past_worst, n_tokens)
-        s.reserve(g_worst)
-
-        mem_size = s.buffer_size
-        print(
-            f"main: compute buffer size: {mem_size / 1024 / 1024:.2f} MB",
-            file=sys.stderr,
-        )
 
         # Tokenize prompt
         embd_inp = gpt_tokenize(token_to_id, args.prompt)
@@ -550,9 +540,7 @@ def main():
         while i < len(embd_inp) + n_predict:
             if len(embd) > 0:
                 t_start = ggml.time_us()
-                logits = gpt2_eval(
-                    model, s, args.threads, n_past, embd
-                )
+                logits = gpt2_eval(model, s, n_past, embd)
                 t_predict_us += ggml.time_us() - t_start
 
             n_past += len(embd)

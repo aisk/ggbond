@@ -25,18 +25,63 @@ class Session:
         self._contexts: list = []
         self._buffers: list = []
 
-    def tensor(self, data, *, name: str | None = None) -> Tensor:
-        """Create a leaf Tensor bound to this session. Data is uploaded to the backend immediately."""
-        data = np.asarray(data, dtype=np.float32)
-        shape = tuple(reversed(data.shape))
+    @property
+    def backend(self) -> Backend:
+        """The underlying backend (read-only)."""
+        return self._backend
+
+    def tensor(self, data, *, dtype=None, shape=None, name: str | None = None) -> Tensor:
+        """Create a leaf Tensor bound to this session. Data is uploaded to the backend immediately.
+
+        *dtype* defaults to F32. Pass e.g. ``ggml.Type.I32`` for integer tensors.
+        *shape* overrides the shape in GGML order (ne0, ne1, ...); by default
+        it is inferred from the numpy array shape (reversed).
+        *data* may be a numpy array, a scalar, or raw ``bytes``.
+        """
+        _NP_DTYPE = {
+            ggml.Type.F32: np.float32,
+            ggml.Type.F16: np.float16,
+            ggml.Type.I32: np.int32,
+            ggml.Type.I8: np.int8,
+            ggml.Type.I16: np.int16,
+            ggml.Type.I64: np.int64,
+            ggml.Type.F64: np.float64,
+        }
+        if dtype is None:
+            dtype = ggml.Type.F32
+        np_dtype = _NP_DTYPE.get(dtype, np.float32)
+
+        if isinstance(data, bytes):
+            raw_bytes = data
+            if shape is None:
+                raise ValueError("shape is required when data is raw bytes")
+        else:
+            data = np.asarray(data, dtype=np_dtype)
+            raw_bytes = None
+            if shape is None:
+                shape = tuple(reversed(data.shape))
+
         ctx = Context(n_tensors=1)
-        t = ctx.new_tensor(ggml.Type.F32, *shape, name=name)
+        t = ctx.new_tensor(dtype, *shape, name=name)
         ggml.set_input(t)
         buf = self._backend.alloc_ctx(ctx)
-        self._backend.tensor_set(t, data)
+        if raw_bytes is not None:
+            ggml.backend_tensor_set(t, np.frombuffer(raw_bytes, dtype=np.uint8), 0, len(raw_bytes))
+        else:
+            self._backend.tensor_set(t, data)
         self._contexts.append(ctx)
         self._buffers.append(buf)
-        return Tensor._from_ggml(self, t, shape=shape, name=name)
+        return Tensor._from_ggml(self, t, shape=shape, dtype=dtype, name=name)
+
+    def empty(self, dtype, *shape, name: str | None = None) -> Tensor:
+        """Create an uninitialized leaf Tensor (e.g. for KV cache buffers)."""
+        ctx = Context(n_tensors=1)
+        t = ctx.new_tensor(dtype, *shape, name=name)
+        ggml.set_input(t)
+        buf = self._backend.alloc_ctx(ctx)
+        self._contexts.append(ctx)
+        self._buffers.append(buf)
+        return Tensor._from_ggml(self, t, shape=shape, dtype=dtype, name=name)
 
     def load_gguf(self, fname: str) -> dict[str, Tensor]:
         """Load a GGUF model. Weights reside directly on the current backend."""
