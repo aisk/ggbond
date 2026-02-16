@@ -63,6 +63,30 @@ class Graph:
     def concat(self, a: ggml.Tensor, b: ggml.Tensor, dim: int = 0) -> ggml.Tensor:
         return ggml.concat(self.ctx, a, b, dim)
 
+    def get_rows(self, a: ggml.Tensor, b: ggml.Tensor) -> ggml.Tensor:
+        return ggml.get_rows(self.ctx, a, b)
+
+    def cpy(self, a: ggml.Tensor, b: ggml.Tensor) -> ggml.Tensor:
+        return ggml.cpy(self.ctx, a, b)
+
+    def permute(self, a: ggml.Tensor, a0: int, a1: int, a2: int, a3: int) -> ggml.Tensor:
+        return ggml.permute(self.ctx, a, a0, a1, a2, a3)
+
+    def diag_mask_inf(self, a: ggml.Tensor, n_past: int) -> ggml.Tensor:
+        return ggml.diag_mask_inf(self.ctx, a, n_past)
+
+    def view_1d(self, a: ggml.Tensor, ne0: int, offset: int) -> ggml.Tensor:
+        return ggml.view_1d(self.ctx, a, ne0, offset)
+
+    def view_2d(self, a: ggml.Tensor, ne0: int, ne1: int, nb1: int, offset: int) -> ggml.Tensor:
+        return ggml.view_2d(self.ctx, a, ne0, ne1, nb1, offset)
+
+    def cont_2d(self, a: ggml.Tensor, ne0: int, ne1: int) -> ggml.Tensor:
+        return ggml.cont_2d(self.ctx, a, ne0, ne1)
+
+    def cont_3d(self, a: ggml.Tensor, ne0: int, ne1: int, ne2: int) -> ggml.Tensor:
+        return ggml.cont_3d(self.ctx, a, ne0, ne1, ne2)
+
     # -- unary / activation ops -----------------------------------------------
 
     def relu(self, a: ggml.Tensor) -> ggml.Tensor:

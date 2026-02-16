@@ -77,6 +77,20 @@ def _materialize_op(op: str, ctx_raw, ggml_inputs: list, kwargs: dict):
         if dim == 3:
             return ggml.reshape_3d(ctx_raw, ggml_inputs[0], shape[0], shape[1], shape[2])
         return ggml.reshape_4d(ctx_raw, ggml_inputs[0], shape[0], shape[1], shape[2], shape[3])
+    if op == "get_rows":
+        return ggml.get_rows(ctx_raw, ggml_inputs[0], ggml_inputs[1])
+    if op == "permute":
+        return ggml.permute(ctx_raw, ggml_inputs[0], kwargs["a0"], kwargs["a1"], kwargs["a2"], kwargs["a3"])
+    if op == "diag_mask_inf":
+        return ggml.diag_mask_inf(ctx_raw, ggml_inputs[0], kwargs["n_past"])
+    if op == "view_1d":
+        return ggml.view_1d(ctx_raw, ggml_inputs[0], kwargs["ne0"], kwargs["offset"])
+    if op == "view_2d":
+        return ggml.view_2d(ctx_raw, ggml_inputs[0], kwargs["ne0"], kwargs["ne1"], kwargs["nb1"], kwargs["offset"])
+    if op == "cont_2d":
+        return ggml.cont_2d(ctx_raw, ggml_inputs[0], kwargs["ne0"], kwargs["ne1"])
+    if op == "cont_3d":
+        return ggml.cont_3d(ctx_raw, ggml_inputs[0], kwargs["ne0"], kwargs["ne1"], kwargs["ne2"])
     raise ValueError(f"unknown op: {op!r}")
 
 
@@ -126,6 +140,24 @@ def _infer_shape(op: str, inputs: tuple[Tensor, ...], kwargs: dict) -> tuple[int
         return (ne0,) + s[1:]
     if op.startswith("reshape_"):
         return kwargs["shape"]
+    if op == "get_rows":
+        a, b = inputs[0]._shape, inputs[1]._shape
+        return (a[0],) + b
+    if op == "permute":
+        s = inputs[0]._shape
+        perm = (kwargs["a0"], kwargs["a1"], kwargs["a2"], kwargs["a3"])
+        padded = s + (1,) * (4 - len(s))
+        return tuple(padded[p] for p in perm)[:len(s)]
+    if op == "diag_mask_inf":
+        return inputs[0]._shape
+    if op == "view_1d":
+        return (kwargs["ne0"],)
+    if op == "view_2d":
+        return (kwargs["ne0"], kwargs["ne1"])
+    if op == "cont_2d":
+        return (kwargs["ne0"], kwargs["ne1"])
+    if op == "cont_3d":
+        return (kwargs["ne0"], kwargs["ne1"], kwargs["ne2"])
     return inputs[0]._shape
 
 
@@ -328,6 +360,27 @@ class Tensor:
             f"reshape_{ndim}d", (self,),
             kwargs={"shape": shape},
         )
+
+    def get_rows(self, indices: Tensor) -> Tensor:
+        return Tensor._from_op("get_rows", (self, indices))
+
+    def permute(self, a0: int, a1: int, a2: int, a3: int) -> Tensor:
+        return Tensor._from_op("permute", (self,), kwargs={"a0": a0, "a1": a1, "a2": a2, "a3": a3})
+
+    def diag_mask_inf(self, n_past: int) -> Tensor:
+        return Tensor._from_op("diag_mask_inf", (self,), kwargs={"n_past": n_past})
+
+    def view_1d(self, ne0: int, offset: int) -> Tensor:
+        return Tensor._from_op("view_1d", (self,), kwargs={"ne0": ne0, "offset": offset})
+
+    def view_2d(self, ne0: int, ne1: int, nb1: int, offset: int) -> Tensor:
+        return Tensor._from_op("view_2d", (self,), kwargs={"ne0": ne0, "ne1": ne1, "nb1": nb1, "offset": offset})
+
+    def cont_2d(self, ne0: int, ne1: int) -> Tensor:
+        return Tensor._from_op("cont_2d", (self,), kwargs={"ne0": ne0, "ne1": ne1})
+
+    def cont_3d(self, ne0: int, ne1: int, ne2: int) -> Tensor:
+        return Tensor._from_op("cont_3d", (self,), kwargs={"ne0": ne0, "ne1": ne1, "ne2": ne2})
 
     def pool_1d(self, op_pool, k: int, s: int, p: int = 0) -> Tensor:
         return Tensor._from_op(
