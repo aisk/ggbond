@@ -7,7 +7,6 @@ from collections import deque
 import numpy as np
 
 from ggbond import ggml
-from ggbond.backend import Backend
 from ggbond.context import Context
 from ggbond.graph import GAllocr, Graph
 
@@ -66,6 +65,8 @@ def _materialize_op(op: str, ctx_raw, ggml_inputs: list, kwargs: dict):
         return ggml.l2_norm(ctx_raw, ggml_inputs[0], kwargs["eps"])
     if op == "leaky_relu":
         return ggml.leaky_relu(ctx_raw, ggml_inputs[0], kwargs["negative_slope"], False)
+    if op == "pool_1d":
+        return ggml.pool_1d(ctx_raw, ggml_inputs[0], kwargs["op_pool"], kwargs["k"], kwargs["s"], kwargs["p"])
     if op.startswith("reshape_"):
         dim = int(op[-2])
         shape = kwargs["shape"]
@@ -118,6 +119,11 @@ def _infer_shape(op: str, inputs: tuple[Tensor, ...], kwargs: dict) -> tuple[int
         return (1,)
     if op in ("sum_rows", "mean", "argmax"):
         return (1,) + inputs[0]._shape[1:]
+    if op == "pool_1d":
+        s = inputs[0]._shape
+        k, stride, pad = kwargs["k"], kwargs["s"], kwargs["p"]
+        ne0 = (s[0] + 2 * pad - k) // stride + 1
+        return (ne0,) + s[1:]
     if op.startswith("reshape_"):
         return kwargs["shape"]
     return inputs[0]._shape
@@ -127,36 +133,25 @@ class Tensor:
     """Lazy tensor that records operations and materializes on ``.compute()``."""
 
     __slots__ = (
-        "_data", "_op", "_inputs", "_kwargs",
+        "_op", "_inputs", "_kwargs",
         "_dtype", "_shape", "_name", "_cached",
+        "_session", "_ggml_tensor",
     )
 
-    def __init__(
-        self,
-        *,
-        data: np.ndarray | None = None,
-        shape: tuple[int, ...] | None = None,
-        dtype=None,
-        name: str | None = None,
-    ):
-        self._op: str | None = None
-        self._inputs: tuple[Tensor, ...] = ()
-        self._kwargs: dict = {}
-        self._name = name
-        self._cached: np.ndarray | None = None
-
-        if data is not None:
-            data = np.asarray(data, dtype=np.float32 if dtype is None else dtype)
-            self._data = data
-            self._dtype = ggml.Type.F32  # TODO: map from numpy dtype
-            # GGML shape is reversed numpy shape
-            self._shape = tuple(reversed(data.shape))
-        elif shape is not None:
-            self._data = None
-            self._dtype = dtype if dtype is not None else ggml.Type.F32
-            self._shape = shape
-        else:
-            raise ValueError("must provide either data= or shape=")
+    @classmethod
+    def _from_ggml(cls, session, ggml_tensor, shape, dtype=None, name=None):
+        """Create a leaf node backed by a backend-resident ggml tensor."""
+        obj = object.__new__(cls)
+        obj._session = session
+        obj._ggml_tensor = ggml_tensor
+        obj._op = None
+        obj._inputs = ()
+        obj._kwargs = {}
+        obj._dtype = dtype or ggml.Type.F32
+        obj._shape = shape
+        obj._name = name
+        obj._cached = None
+        return obj
 
     @classmethod
     def _from_op(
@@ -167,10 +162,11 @@ class Tensor:
         kwargs: dict | None = None,
     ) -> Tensor:
         obj = object.__new__(cls)
+        obj._session = inputs[0]._session
+        obj._ggml_tensor = None
         obj._op = op
         obj._inputs = inputs
         obj._kwargs = kwargs or {}
-        obj._data = None
         obj._name = None
         obj._cached = None
         obj._dtype = dtype if dtype is not None else inputs[0]._dtype
@@ -333,97 +329,64 @@ class Tensor:
             kwargs={"shape": shape},
         )
 
+    def pool_1d(self, op_pool, k: int, s: int, p: int = 0) -> Tensor:
+        return Tensor._from_op(
+            "pool_1d", (self,),
+            kwargs={"op_pool": op_pool, "k": k, "s": s, "p": p},
+        )
+
     # -- compute --------------------------------------------------------------
 
-    def compute(self, backend: Backend | str = "cpu") -> Tensor:
+    def compute(self) -> Tensor:
         """Materialize the computation graph and execute it. Returns self."""
+        backend = self._session._backend
         ordered, leaves = _topo_sort(self)
 
-        if not ordered:
+        if self._op is None:
+            # Bare leaf node: read directly from backend
+            self._cached = backend.tensor_get(self._ggml_tensor)
             return self
 
-        # If this is a bare leaf with data, just cache it directly
-        if self._op is None and self._data is not None:
-            self._cached = self._data.flatten().astype(np.float32)
-            return self
+        # All leaves are backend-resident, map directly
+        ggml_map = {id(leaf): leaf._ggml_tensor for leaf in leaves}
 
-        # Resolve backend
-        if isinstance(backend, str):
-            backend = Backend(backend)
-            owns_backend = True
-        else:
-            owns_backend = False
+        # Build Graph
+        n_ops = sum(1 for n in ordered if n._op is not None)
+        g = Graph(max_nodes=n_ops * 2 + 10)
 
-        try:
-            # Count total tensors needed
-            n_ops = sum(1 for n in ordered if n._op is not None)
-            n_model_tensors = len(leaves)
-            n_graph_tensors = n_ops * 2 + 10
+        for node in ordered:
+            if node._op is None:
+                continue
+            ggml_inputs = [ggml_map[id(inp)] for inp in node._inputs]
+            ggml_result = _materialize_op(node._op, g.ctx, ggml_inputs, node._kwargs)
+            if node._name:
+                ggml.set_name(ggml_result, node._name)
+            ggml_map[id(node)] = ggml_result
 
-            # Phase 1: Create model context for leaf tensors
-            ctx_model = Context(n_tensors=n_model_tensors)
+        result_ggml = ggml_map[id(self)]
+        ggml.set_output(result_ggml)
+        g.build_forward(result_ggml)
 
-            # Create ggml tensors for leaves and set as input
-            ggml_map: dict[int, ggml.Tensor] = {}
-            for i, leaf in enumerate(leaves):
-                t = ctx_model.new_tensor(leaf._dtype, *leaf._shape)
-                ggml.set_input(t)
-                name = leaf._name or f"leaf_{i}"
-                ggml.set_name(t, name)
-                ggml_map[id(leaf)] = t
+        # Allocate, compute, extract
+        allocr = GAllocr(backend)
+        allocr.reserve(g.raw)
+        allocr.alloc(g.raw)
+        backend.compute(g.raw)
 
-            # Allocate leaf memory on backend
-            buf = backend.alloc_ctx(ctx_model)
+        self._cached = backend.tensor_get(result_ggml)
 
-            # Set leaf data
-            for leaf in leaves:
-                if leaf._data is not None:
-                    backend.tensor_set(ggml_map[id(leaf)], leaf._data)
-
-            # Phase 2: Build computation graph
-            g = Graph(max_nodes=n_graph_tensors)
-
-            # Materialize ops in topological order
-            for node in ordered:
-                if node._op is None:
-                    continue
-                ggml_inputs = [ggml_map[id(inp)] for inp in node._inputs]
-                ggml_result = _materialize_op(node._op, g.ctx, ggml_inputs, node._kwargs)
-                if node._name:
-                    ggml.set_name(ggml_result, node._name)
-                ggml_map[id(node)] = ggml_result
-
-            # Mark output and build graph
-            result_ggml = ggml_map[id(self)]
-            ggml.set_output(result_ggml)
-            g.build_forward(result_ggml)
-
-            # Phase 3: Reserve, execute, extract
-            allocr = GAllocr(backend)
-            allocr.reserve(g.raw)
-            allocr.alloc(g.raw)
-            backend.compute(g.raw)
-
-            out = backend.tensor_get(result_ggml)
-            self._cached = out
-
-            # Cleanup temporary resources
-            allocr.close()
-            g.close()
-            ctx_model.close()
-            ggml.backend_buffer_free(buf)
-        finally:
-            if owns_backend:
-                backend.close()
-
+        allocr.close()
+        g.close()
         return self
 
-    def numpy(self, backend: Backend | str = "cpu") -> np.ndarray:
+    def numpy(self) -> np.ndarray:
         """Return result as numpy array. Triggers compute() if needed."""
         if self._cached is None:
-            self.compute(backend)
-        np_shape = tuple(reversed(self._shape))
-        return self._cached.reshape(np_shape)
+            self.compute()
+        return self._cached.reshape(tuple(reversed(self._shape)))
+
+    def tolist(self) -> list:
+        return self.numpy().tolist()
 
     def __repr__(self) -> str:
         np_shape = tuple(reversed(self._shape))

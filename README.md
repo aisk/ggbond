@@ -16,34 +16,36 @@ pip install -e .
 - CMake 3.15+
 - C++17 compatible compiler
 
+## Architecture
+
+GGBond provides three layers of abstraction:
+
+### Layer 1: `ggbond.ggml` — Low-level bindings
+
+A near 1:1 mapping of the GGML C API. Functions follow GGML naming conventions (`new_tensor_2d`, `mul_mat`, `backend_graph_compute`, etc.). All GGML opaque pointers are wrapped as distinct Python types (`ggml.Context`, `ggml.Tensor`, `ggml.Backend`, etc.) for type safety. Use this layer when you need full control over the GGML computation model.
+
+### Layer 2: OO wrappers — `Backend`, `Context`, `Graph`, `GAllocr`
+
+Object-oriented wrappers around GGML primitives with lifecycle management (`close()` / context manager). They simplify common patterns but are **not** a complete 1:1 equivalent of the raw API — for example, `Graph` internally owns its own `Context` for graph operations, and `Context` computes memory size from `n_tensors` automatically. These are primarily used as building blocks for the higher-level API.
+
+### Layer 3: `Session` + `Tensor` — High-level API
+
+`Session` owns a backend and manages all resource lifetimes. `Tensor` is a lazy-evaluated tensor bound to a session — operations build a computation graph, which is materialized on `compute()` or `numpy()`. GGUF model weights are loaded directly onto the target backend (CPU/Metal) without intermediate copies.
+
 ## Quick Start
 
 ```python
 import numpy as np
 import ggbond
-from ggbond import ggml
 
 matrix_a = np.array([[2, 8], [5, 1], [4, 2], [8, 6]], dtype=np.float32)
 matrix_b = np.array([[10, 5], [9, 9], [5, 4]], dtype=np.float32)
-rows_a, cols_a = matrix_a.shape
-rows_b, cols_b = matrix_b.shape
 
-with ggbond.Session("cpu") as s:
-    ctx_model = s.context(n_tensors=2)
-    a = ctx_model.new_tensor(ggml.Type.F32, cols_a, rows_a)
-    b = ctx_model.new_tensor(ggml.Type.F32, cols_b, rows_b)
-    s.alloc(ctx_model)
-    s.set(a, matrix_a)
-    s.set(b, matrix_b)
-
-    ctx_graph = s.graph_context()
-    result = ggml.mul_mat(ctx_graph.raw, a, b)
-    graph = ctx_graph.new_graph()
-    ggml.build_forward_expand(graph, result)
-
-    s.reserve(graph)
-    s.run(graph)
-    print(s.get(graph, result).reshape(3, 4))
+s = ggbond.Session("cpu")
+a = s.tensor(matrix_a)
+b = s.tensor(matrix_b)
+print((a @ b).numpy())
+s.close()
 ```
 
 ## Examples
