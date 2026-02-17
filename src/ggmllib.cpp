@@ -875,4 +875,49 @@ PYBIND11_MODULE(ggml, m) {
     m.def("gguf_get_tensor_name", [](GGUFContextPtr ctx, int64_t tensor_id) {
         return gguf_get_tensor_name(static_cast<const struct gguf_context*>(ctx.ptr), tensor_id);
     }, "Get tensor name by index", py::arg("ctx"), py::arg("tensor_id"));
+
+    // GGUF KV metadata functions
+    m.def("gguf_get_n_kv", [](GGUFContextPtr ctx) {
+        return gguf_get_n_kv(static_cast<const struct gguf_context*>(ctx.ptr));
+    }, "Get number of KV pairs in GGUF file", py::arg("ctx"));
+
+    m.def("gguf_find_key", [](GGUFContextPtr ctx, const char* key) {
+        return gguf_find_key(static_cast<const struct gguf_context*>(ctx.ptr), key);
+    }, "Find key index by name, returns -1 if not found", py::arg("ctx"), py::arg("key"));
+
+    m.def("gguf_get_key", [](GGUFContextPtr ctx, int64_t key_id) {
+        return gguf_get_key(static_cast<const struct gguf_context*>(ctx.ptr), key_id);
+    }, "Get key name by index", py::arg("ctx"), py::arg("key_id"));
+
+    m.def("gguf_get_kv_type", [](GGUFContextPtr ctx, int64_t key_id) {
+        return static_cast<int>(gguf_get_kv_type(static_cast<const struct gguf_context*>(ctx.ptr), key_id));
+    }, "Get KV pair type by key index", py::arg("ctx"), py::arg("key_id"));
+
+    m.def("gguf_get_val_str", [](GGUFContextPtr ctx, int64_t key_id) {
+        return gguf_get_val_str(static_cast<const struct gguf_context*>(ctx.ptr), key_id);
+    }, "Get string value by key index", py::arg("ctx"), py::arg("key_id"));
+
+    m.def("gguf_get_val_u32", [](GGUFContextPtr ctx, int64_t key_id) {
+        return gguf_get_val_u32(static_cast<const struct gguf_context*>(ctx.ptr), key_id);
+    }, "Get uint32 value by key index", py::arg("ctx"), py::arg("key_id"));
+
+    m.def("gguf_get_val_i32", [](GGUFContextPtr ctx, int64_t key_id) {
+        return gguf_get_val_i32(static_cast<const struct gguf_context*>(ctx.ptr), key_id);
+    }, "Get int32 value by key index", py::arg("ctx"), py::arg("key_id"));
+
+    m.def("gguf_get_val_f32", [](GGUFContextPtr ctx, int64_t key_id) {
+        return gguf_get_val_f32(static_cast<const struct gguf_context*>(ctx.ptr), key_id);
+    }, "Get float32 value by key index", py::arg("ctx"), py::arg("key_id"));
+
+    m.def("gguf_get_val_i64", [](GGUFContextPtr ctx, int64_t key_id) {
+        return gguf_get_val_i64(static_cast<const struct gguf_context*>(ctx.ptr), key_id);
+    }, "Get int64 value by key index", py::arg("ctx"), py::arg("key_id"));
+
+    m.def("gguf_get_arr_n", [](GGUFContextPtr ctx, int64_t key_id) {
+        return gguf_get_arr_n(static_cast<const struct gguf_context*>(ctx.ptr), key_id);
+    }, "Get array length by key index", py::arg("ctx"), py::arg("key_id"));
+
+    m.def("gguf_get_arr_str", [](GGUFContextPtr ctx, int64_t key_id, size_t i) {
+        return gguf_get_arr_str(static_cast<const struct gguf_context*>(ctx.ptr), key_id, i);
+    }, "Get i-th string from array by key index", py::arg("ctx"), py::arg("key_id"), py::arg("i"));
 }
