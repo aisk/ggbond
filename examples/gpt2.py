@@ -1,21 +1,16 @@
 """
-GPT-2 inference using ggbond Session API.
-
-Ported from vendor/ggml/examples/gpt-2/main-backend.cpp
+GPT-2 inference using ggbond Session API with GGUF format.
 
 Usage:
-    python examples/gpt2.py -m models/gpt-2-117M/ggml-model-f32.bin -p "Hello, world"
+    python examples/gpt2.py -m models/gpt2-117M.gguf -p "Hello, world"
 
-Download model:
-    cd vendor/ggml
-    python examples/gpt-2/download-model.py 124M
-    python examples/gpt-2/convert-ckpt-to-ggml.py models/gpt-2-117M/ 0
+Download/Convert model:
+    # Use existing GGUF conversion tools (e.g., llama.cpp)
 """
 
 import argparse
 import math
 import re
-import struct
 import sys
 import random
 
@@ -158,155 +153,92 @@ class GPT2Model:
 def gpt2_model_load(
     fname: str, model: GPT2Model, session: ggbond.Session, n_ctx: int
 ) -> tuple[dict[str, int], dict[int, str]]:
-    """Load GPT-2 model from binary file. Returns (token_to_id, id_to_token)."""
+    """Load GPT-2 model from GGUF file. Returns (token_to_id, id_to_token)."""
     print(f"gpt2_model_load: loading model from '{fname}'")
 
-    with open(fname, "rb") as f:
-        (magic,) = struct.unpack("<I", f.read(4))
-        if magic != ggml.FILE_MAGIC:
-            raise ValueError(
-                f"invalid model file '{fname}' (bad magic: {magic:#x}, "
-                f"expected {ggml.FILE_MAGIC:#x})"
-            )
+    # Initialize GGUF context to read metadata
+    gguf_ctx, _ = ggml.gguf_init_from_file(fname, no_alloc=True)
 
-        hp = model.hparams
-        hp.n_vocab, hp.n_ctx, hp.n_embd, hp.n_head, hp.n_layer, hp.ftype = (
-            struct.unpack("<6i", f.read(24))
-        )
+    # Read hyperparameters from metadata
+    # GGUF stores these as uint32 (type=4) or float32 (type=6)
+    def get_u32(key: str) -> int | None:
+        key_id = ggml.gguf_find_key(gguf_ctx, key)
+        if key_id < 0:
+            return None
+        return ggml.gguf_get_val_u32(gguf_ctx, key_id)
 
-        qntvr = hp.ftype // ggml.QNT_VERSION_FACTOR
-        print(f"gpt2_model_load: n_vocab = {hp.n_vocab}")
-        print(f"gpt2_model_load: n_ctx   = {hp.n_ctx}")
-        print(f"gpt2_model_load: n_embd  = {hp.n_embd}")
-        print(f"gpt2_model_load: n_head  = {hp.n_head}")
-        print(f"gpt2_model_load: n_layer = {hp.n_layer}")
-        print(f"gpt2_model_load: ftype   = {hp.ftype}")
-        print(f"gpt2_model_load: qntvr   = {qntvr}")
+    def get_f32(key: str) -> float | None:
+        key_id = ggml.gguf_find_key(gguf_ctx, key)
+        if key_id < 0:
+            return None
+        return ggml.gguf_get_val_f32(gguf_ctx, key_id)
 
-        hp.ftype %= ggml.QNT_VERSION_FACTOR
+    hp = model.hparams
+    hp.n_vocab = get_u32("gpt2.vocab_size") or 50257
+    hp.n_embd = get_u32("gpt2.embedding_length") or 768
+    hp.n_head = get_u32("gpt2.attention.head_count") or 12
+    hp.n_layer = get_u32("gpt2.block_count") or 12
+    hp.eps = get_f32("gpt2.attention.layer_norm_epsilon") or 1e-5
 
-        (n_vocab_file,) = struct.unpack("<i", f.read(4))
-        if n_vocab_file != hp.n_vocab:
-            raise ValueError(
-                f"invalid model file '{fname}' "
-                f"(bad vocab size {n_vocab_file} != {hp.n_vocab})"
-            )
+    print(f"gpt2_model_load: n_vocab = {hp.n_vocab}")
+    print(f"gpt2_model_load: n_embd  = {hp.n_embd}")
+    print(f"gpt2_model_load: n_head  = {hp.n_head}")
+    print(f"gpt2_model_load: n_layer = {hp.n_layer}")
 
+    # Read vocabulary
+    token_key_id = ggml.gguf_find_key(gguf_ctx, "tokenizer.ggml.tokens")
+    if token_key_id >= 0:
+        n_tokens = ggml.gguf_get_arr_n(gguf_ctx, token_key_id)
         token_to_id: dict[str, int] = {}
         id_to_token: dict[int, str] = {}
-        for i in range(hp.n_vocab):
-            (length,) = struct.unpack("<I", f.read(4))
-            word = f.read(length).decode("utf-8", errors="replace")
-            token_to_id[word] = i
-            id_to_token[i] = word
+        for i in range(n_tokens):
+            token = ggml.gguf_get_arr_str(gguf_ctx, token_key_id, i)
+            token_to_id[token] = i
+            id_to_token[i] = token
+    else:
+        raise ValueError("GGUF file missing tokenizer.ggml.tokens metadata")
 
-        wtype = ggml.Type(ggml.ftype_to_ggml_type(hp.ftype))
+    # Free GGUF context (metadata read complete)
+    ggml.gguf_free(gguf_ctx)
 
-        n_embd = hp.n_embd
-        n_layer = hp.n_layer
+    # Load weight tensors (weights loaded directly to backend)
+    weights = session.load_gguf(fname)
+    print(f"gpt2_model_load: loaded {len(weights)} tensors")
 
-        # Build a name→(dtype, shape) map for all expected tensors
-        tensor_info: dict[str, tuple] = {}
-        tensor_info["model/ln_f/g"] = (ggml.Type.F32, (n_embd,))
-        tensor_info["model/ln_f/b"] = (ggml.Type.F32, (n_embd,))
-        tensor_info["model/wte"] = (wtype, (n_embd, hp.n_vocab))
-        tensor_info["model/wpe"] = (ggml.Type.F32, (n_embd, hp.n_ctx))
-        tensor_info["model/lm_head"] = (wtype, (n_embd, hp.n_vocab))
+    # Override n_ctx
+    model.hparams.n_ctx = n_ctx
+    n_embd = hp.n_embd
+    n_layer = hp.n_layer
 
-        for i in range(n_layer):
-            prefix = f"model/h{i}"
-            tensor_info[f"{prefix}/ln_1/g"] = (ggml.Type.F32, (n_embd,))
-            tensor_info[f"{prefix}/ln_1/b"] = (ggml.Type.F32, (n_embd,))
-            tensor_info[f"{prefix}/ln_2/g"] = (ggml.Type.F32, (n_embd,))
-            tensor_info[f"{prefix}/ln_2/b"] = (ggml.Type.F32, (n_embd,))
-            tensor_info[f"{prefix}/attn/c_attn/w"] = (wtype, (n_embd, 3 * n_embd))
-            tensor_info[f"{prefix}/attn/c_attn/b"] = (ggml.Type.F32, (3 * n_embd,))
-            tensor_info[f"{prefix}/attn/c_proj/w"] = (wtype, (n_embd, n_embd))
-            tensor_info[f"{prefix}/attn/c_proj/b"] = (ggml.Type.F32, (n_embd,))
-            tensor_info[f"{prefix}/mlp/c_fc/w"] = (wtype, (n_embd, 4 * n_embd))
-            tensor_info[f"{prefix}/mlp/c_fc/b"] = (ggml.Type.F32, (4 * n_embd,))
-            tensor_info[f"{prefix}/mlp/c_proj/w"] = (wtype, (4 * n_embd, n_embd))
-            tensor_info[f"{prefix}/mlp/c_proj/b"] = (ggml.Type.F32, (n_embd,))
+    # Map tensor names (old format -> GGUF format)
+    model.ln_f_g = weights["output_norm.weight"]
+    model.ln_f_b = weights["output_norm.bias"]
+    model.wte = weights["token_embd.weight"]
+    model.wpe = weights["position_embd.weight"]
+    model.lm_head = weights["output.weight"]
 
-        # Read weights from file and create tensors via session.tensor()
-        tensors: dict[str, ggbond.Tensor] = {}
-        total_size = 0
-        has_lm_head = False
+    model.layers = []
+    for i in range(n_layer):
+        layer = GPT2Layer()
+        layer.ln_1_g = weights[f"blk.{i}.attn_norm.weight"]
+        layer.ln_1_b = weights[f"blk.{i}.attn_norm.bias"]
+        layer.ln_2_g = weights[f"blk.{i}.ffn_norm.weight"]
+        layer.ln_2_b = weights[f"blk.{i}.ffn_norm.bias"]
+        layer.c_attn_attn_w = weights[f"blk.{i}.attn_qkv.weight"]
+        layer.c_attn_attn_b = weights[f"blk.{i}.attn_qkv.bias"]
+        layer.c_attn_proj_w = weights[f"blk.{i}.attn_output.weight"]
+        layer.c_attn_proj_b = weights[f"blk.{i}.attn_output.bias"]
+        layer.c_mlp_fc_w = weights[f"blk.{i}.ffn_up.weight"]
+        layer.c_mlp_fc_b = weights[f"blk.{i}.ffn_up.bias"]
+        layer.c_mlp_proj_w = weights[f"blk.{i}.ffn_down.weight"]
+        layer.c_mlp_proj_b = weights[f"blk.{i}.ffn_down.bias"]
+        model.layers.append(layer)
 
-        while True:
-            header = f.read(12)
-            if len(header) < 12:
-                break
-
-            n_dims, length, ttype = struct.unpack("<iii", header)
-
-            ne = [1, 1]
-            for d in range(n_dims):
-                (ne[d],) = struct.unpack("<i", f.read(4))
-
-            name = f.read(length).decode("utf-8")
-
-            if name not in tensor_info:
-                raise ValueError(f"unknown tensor '{name}' in model file")
-
-            dtype, shape = tensor_info[name]
-
-            # Calculate byte count from ggml type info
-            # For quantized types we read raw bytes; for native types use numpy
-            type_size = ggml.type_size(ggml.Type(ttype))
-            block_size = ggml.blck_size(ggml.Type(ttype))
-            n_elements = 1
-            for d in range(n_dims):
-                n_elements *= ne[d]
-            n_bytes = n_elements * type_size // block_size
-
-            raw_data = f.read(n_bytes)
-            t = session.tensor(raw_data, dtype=dtype, shape=shape, name=name)
-            tensors[name] = t
-
-            if name == "model/wte" and not has_lm_head:
-                tensors["model/lm_head"] = t
-
-            if name == "model/lm_head":
-                has_lm_head = True
-
-            total_size += n_bytes
-
-        print(f"gpt2_model_load: model size  = {total_size / 1024 / 1024:.2f} MB")
-
-        # Override n_ctx
-        model.hparams.n_ctx = n_ctx
-
-        # Assign model weight references
-        model.ln_f_g = tensors["model/ln_f/g"]
-        model.ln_f_b = tensors["model/ln_f/b"]
-        model.wte = tensors["model/wte"]
-        model.wpe = tensors["model/wpe"]
-        model.lm_head = tensors["model/lm_head"]
-
-        model.layers = []
-        for i in range(n_layer):
-            layer = GPT2Layer()
-            prefix = f"model/h{i}"
-            layer.ln_1_g = tensors[f"{prefix}/ln_1/g"]
-            layer.ln_1_b = tensors[f"{prefix}/ln_1/b"]
-            layer.ln_2_g = tensors[f"{prefix}/ln_2/g"]
-            layer.ln_2_b = tensors[f"{prefix}/ln_2/b"]
-            layer.c_attn_attn_w = tensors[f"{prefix}/attn/c_attn/w"]
-            layer.c_attn_attn_b = tensors[f"{prefix}/attn/c_attn/b"]
-            layer.c_attn_proj_w = tensors[f"{prefix}/attn/c_proj/w"]
-            layer.c_attn_proj_b = tensors[f"{prefix}/attn/c_proj/b"]
-            layer.c_mlp_fc_w = tensors[f"{prefix}/mlp/c_fc/w"]
-            layer.c_mlp_fc_b = tensors[f"{prefix}/mlp/c_fc/b"]
-            layer.c_mlp_proj_w = tensors[f"{prefix}/mlp/c_proj/w"]
-            layer.c_mlp_proj_b = tensors[f"{prefix}/mlp/c_proj/b"]
-            model.layers.append(layer)
-
-        # Allocate KV cache
-        n_mem = n_layer * n_ctx
-        n_elements = n_embd * n_mem
-        model.memory_k = session.empty(ggml.Type.F32, n_elements, name="memory_k")
-        model.memory_v = session.empty(ggml.Type.F32, n_elements, name="memory_v")
+    # Allocate KV cache
+    n_mem = n_layer * n_ctx
+    n_elements = n_embd * n_mem
+    model.memory_k = session.empty(ggml.Type.F32, n_elements, name="memory_k")
+    model.memory_v = session.empty(ggml.Type.F32, n_elements, name="memory_v")
 
     return token_to_id, id_to_token
 
@@ -480,6 +412,19 @@ def gpt2_eval(
 
 
 # ============================================================================
+# Token decoding
+# ============================================================================
+
+def decode_token(token: str) -> str:
+    """Decode GGUF token string (replaces special Unicode chars with actual chars)."""
+    # GGUF uses special Unicode chars for whitespace:
+    # 'Ġ' (U+0120) -> space
+    # 'Ċ' (U+010A) -> newline
+    # 'ĉ' (U+0109) -> tab (possibly)
+    return token.replace('Ġ', ' ').replace('Ċ', '\n').replace('ĉ', '\t')
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -487,8 +432,8 @@ def main():
     parser = argparse.ArgumentParser(description="GPT-2 inference with ggbond Session API")
     parser.add_argument(
         "-m", "--model", type=str,
-        default="models/gpt-2-117M/ggml-model.bin",
-        help="Path to model file",
+        default="models/gpt2-117M.gguf",
+        help="Path to GGUF model file",
     )
     parser.add_argument("-p", "--prompt", type=str, default="Hello", help="Input prompt")
     parser.add_argument("-n", "--n-predict", type=int, default=200, help="Number of tokens to predict")
@@ -562,7 +507,7 @@ def main():
                 i -= 1
 
             for token_id in embd:
-                print(id_to_token.get(token_id, ""), end="", flush=True)
+                print(decode_token(id_to_token.get(token_id, "")), end="", flush=True)
 
             if embd[-1] == 50256:
                 break

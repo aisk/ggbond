@@ -905,6 +905,54 @@ def gguf_get_tensor_name(ctx: GGUFContext, tensor_id: int) -> str:
     """Get tensor name by index"""
     ...
 
+def gguf_get_n_kv(ctx: GGUFContext) -> int:
+    """Get number of KV pairs in GGUF file"""
+    ...
+
+def gguf_find_key(ctx: GGUFContext, key: str) -> int:
+    """Find key index by name, returns -1 if not found"""
+    ...
+
+def gguf_get_key(ctx: GGUFContext, key_id: int) -> str:
+    """Get key name by index"""
+    ...
+
+def gguf_get_kv_type(ctx: GGUFContext, key_id: int) -> int:
+    """Get KV pair type by key index"""
+    ...
+
+def gguf_get_val_str(ctx: GGUFContext, key_id: int) -> str:
+    """Get string value by key index"""
+    ...
+
+def gguf_get_val_u32(ctx: GGUFContext, key_id: int) -> int:
+    """Get uint32 value by key index"""
+    ...
+
+def gguf_get_val_i32(ctx: GGUFContext, key_id: int) -> int:
+    """Get int32 value by key index"""
+    ...
+
+def gguf_get_val_f32(ctx: GGUFContext, key_id: int) -> float:
+    """Get float32 value by key index"""
+    ...
+
+def gguf_get_val_i64(ctx: GGUFContext, key_id: int) -> int:
+    """Get int64 value by key index"""
+    ...
+
+def gguf_get_val_i64(ctx: GGUFContext, key_id: int) -> int:
+    """Get int64 value by key index"""
+    ...
+
+def gguf_get_arr_n(ctx: GGUFContext, key_id: int) -> int:
+    """Get array length by key index"""
+    ...
+
+def gguf_get_arr_str(ctx: GGUFContext, key_id: int, i: int) -> str:
+    """Get i-th string from array by key index"""
+    ...
+
 # Time utilities
 def time_init() -> None:
     """Initialize time measurement - call this once at the beginning of the program"""
