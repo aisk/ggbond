@@ -13,6 +13,7 @@ import math
 import re
 import sys
 import random
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -106,44 +107,43 @@ def gpt_sample_top_k_top_p(
 # Model structures
 # ============================================================================
 
+@dataclass
 class GPT2HParams:
-    def __init__(self):
-        self.n_vocab = 50257
-        self.n_ctx = 1024
-        self.n_embd = 768
-        self.n_head = 12
-        self.n_layer = 12
-        self.ftype = 1
-        self.eps = 1e-5
+    n_vocab: int = 50257
+    n_ctx: int = 1024
+    n_embd: int = 768
+    n_head: int = 12
+    n_layer: int = 12
+    eps: float = 1e-5
 
 
+@dataclass
 class GPT2Layer:
-    def __init__(self):
-        self.ln_1_g = None
-        self.ln_1_b = None
-        self.ln_2_g = None
-        self.ln_2_b = None
-        self.c_attn_attn_w = None
-        self.c_attn_attn_b = None
-        self.c_attn_proj_w = None
-        self.c_attn_proj_b = None
-        self.c_mlp_fc_w = None
-        self.c_mlp_fc_b = None
-        self.c_mlp_proj_w = None
-        self.c_mlp_proj_b = None
+    ln_1_g: ggbond.Tensor
+    ln_1_b: ggbond.Tensor
+    ln_2_g: ggbond.Tensor
+    ln_2_b: ggbond.Tensor
+    c_attn_attn_w: ggbond.Tensor
+    c_attn_attn_b: ggbond.Tensor
+    c_attn_proj_w: ggbond.Tensor
+    c_attn_proj_b: ggbond.Tensor
+    c_mlp_fc_w: ggbond.Tensor
+    c_mlp_fc_b: ggbond.Tensor
+    c_mlp_proj_w: ggbond.Tensor
+    c_mlp_proj_b: ggbond.Tensor
 
 
+@dataclass
 class GPT2Model:
-    def __init__(self):
-        self.hparams = GPT2HParams()
-        self.ln_f_g = None
-        self.ln_f_b = None
-        self.wte = None
-        self.wpe = None
-        self.lm_head = None
-        self.layers: list[GPT2Layer] = []
-        self.memory_k = None
-        self.memory_v = None
+    hparams: GPT2HParams
+    ln_f_g: ggbond.Tensor
+    ln_f_b: ggbond.Tensor
+    wte: ggbond.Tensor
+    wpe: ggbond.Tensor
+    lm_head: ggbond.Tensor
+    layers: list[GPT2Layer]
+    memory_k: ggbond.Tensor
+    memory_v: ggbond.Tensor
 
 
 # ============================================================================
@@ -151,9 +151,9 @@ class GPT2Model:
 # ============================================================================
 
 def gpt2_model_load(
-    fname: str, model: GPT2Model, session: ggbond.Session, n_ctx: int
-) -> tuple[dict[str, int], dict[int, str]]:
-    """Load GPT-2 model from GGUF file. Returns (token_to_id, id_to_token)."""
+    fname: str, session: ggbond.Session, n_ctx: int
+) -> tuple[GPT2Model, dict[str, int], dict[int, str]]:
+    """Load GPT-2 model from GGUF file. Returns (model, token_to_id, id_to_token)."""
     print(f"gpt2_model_load: loading model from '{fname}'")
 
     # Initialize GGUF context to read metadata
@@ -173,17 +173,16 @@ def gpt2_model_load(
             return None
         return ggml.gguf_get_val_f32(gguf_ctx, key_id)
 
-    hp = model.hparams
-    hp.n_vocab = get_u32("gpt2.vocab_size") or 50257
-    hp.n_embd = get_u32("gpt2.embedding_length") or 768
-    hp.n_head = get_u32("gpt2.attention.head_count") or 12
-    hp.n_layer = get_u32("gpt2.block_count") or 12
-    hp.eps = get_f32("gpt2.attention.layer_norm_epsilon") or 1e-5
+    n_vocab = get_u32("gpt2.vocab_size") or 50257
+    n_embd = get_u32("gpt2.embedding_length") or 768
+    n_head = get_u32("gpt2.attention.head_count") or 12
+    n_layer = get_u32("gpt2.block_count") or 12
+    eps = get_f32("gpt2.attention.layer_norm_epsilon") or 1e-5
 
-    print(f"gpt2_model_load: n_vocab = {hp.n_vocab}")
-    print(f"gpt2_model_load: n_embd  = {hp.n_embd}")
-    print(f"gpt2_model_load: n_head  = {hp.n_head}")
-    print(f"gpt2_model_load: n_layer = {hp.n_layer}")
+    print(f"gpt2_model_load: n_vocab = {n_vocab}")
+    print(f"gpt2_model_load: n_embd  = {n_embd}")
+    print(f"gpt2_model_load: n_head  = {n_head}")
+    print(f"gpt2_model_load: n_layer = {n_layer}")
 
     # Read vocabulary
     token_key_id = ggml.gguf_find_key(gguf_ctx, "tokenizer.ggml.tokens")
@@ -205,42 +204,58 @@ def gpt2_model_load(
     weights = session.load_gguf(fname)
     print(f"gpt2_model_load: loaded {len(weights)} tensors")
 
-    # Override n_ctx
-    model.hparams.n_ctx = n_ctx
-    n_embd = hp.n_embd
-    n_layer = hp.n_layer
+    hp = GPT2HParams(
+        n_vocab=n_vocab,
+        n_ctx=n_ctx,
+        n_embd=n_embd,
+        n_head=n_head,
+        n_layer=n_layer,
+        eps=eps,
+    )
 
-    # Map tensor names (old format -> GGUF format)
-    model.ln_f_g = weights["output_norm.weight"]
-    model.ln_f_b = weights["output_norm.bias"]
-    model.wte = weights["token_embd.weight"]
-    model.wpe = weights["position_embd.weight"]
-    model.lm_head = weights["output.weight"]
+    ln_f_g = weights["output_norm.weight"]
+    ln_f_b = weights["output_norm.bias"]
+    wte = weights["token_embd.weight"]
+    wpe = weights["position_embd.weight"]
+    lm_head = weights["output.weight"]
 
-    model.layers = []
+    layers: list[GPT2Layer] = []
     for i in range(n_layer):
-        layer = GPT2Layer()
-        layer.ln_1_g = weights[f"blk.{i}.attn_norm.weight"]
-        layer.ln_1_b = weights[f"blk.{i}.attn_norm.bias"]
-        layer.ln_2_g = weights[f"blk.{i}.ffn_norm.weight"]
-        layer.ln_2_b = weights[f"blk.{i}.ffn_norm.bias"]
-        layer.c_attn_attn_w = weights[f"blk.{i}.attn_qkv.weight"]
-        layer.c_attn_attn_b = weights[f"blk.{i}.attn_qkv.bias"]
-        layer.c_attn_proj_w = weights[f"blk.{i}.attn_output.weight"]
-        layer.c_attn_proj_b = weights[f"blk.{i}.attn_output.bias"]
-        layer.c_mlp_fc_w = weights[f"blk.{i}.ffn_up.weight"]
-        layer.c_mlp_fc_b = weights[f"blk.{i}.ffn_up.bias"]
-        layer.c_mlp_proj_w = weights[f"blk.{i}.ffn_down.weight"]
-        layer.c_mlp_proj_b = weights[f"blk.{i}.ffn_down.bias"]
-        model.layers.append(layer)
+        layer = GPT2Layer(
+            ln_1_g=weights[f"blk.{i}.attn_norm.weight"],
+            ln_1_b=weights[f"blk.{i}.attn_norm.bias"],
+            ln_2_g=weights[f"blk.{i}.ffn_norm.weight"],
+            ln_2_b=weights[f"blk.{i}.ffn_norm.bias"],
+            c_attn_attn_w=weights[f"blk.{i}.attn_qkv.weight"],
+            c_attn_attn_b=weights[f"blk.{i}.attn_qkv.bias"],
+            c_attn_proj_w=weights[f"blk.{i}.attn_output.weight"],
+            c_attn_proj_b=weights[f"blk.{i}.attn_output.bias"],
+            c_mlp_fc_w=weights[f"blk.{i}.ffn_up.weight"],
+            c_mlp_fc_b=weights[f"blk.{i}.ffn_up.bias"],
+            c_mlp_proj_w=weights[f"blk.{i}.ffn_down.weight"],
+            c_mlp_proj_b=weights[f"blk.{i}.ffn_down.bias"],
+        )
+        layers.append(layer)
 
     # Allocate KV cache
     n_mem = n_layer * n_ctx
     n_elements = n_embd * n_mem
-    model.memory_k = session.empty(ggml.Type.F32, n_elements, name="memory_k")
-    model.memory_v = session.empty(ggml.Type.F32, n_elements, name="memory_v")
+    memory_k = session.empty(ggml.Type.F32, n_elements, name="memory_k")
+    memory_v = session.empty(ggml.Type.F32, n_elements, name="memory_v")
 
-    return token_to_id, id_to_token
+    model = GPT2Model(
+        hparams=hp,
+        ln_f_g=ln_f_g,
+        ln_f_b=ln_f_b,
+        wte=wte,
+        wpe=wpe,
+        lm_head=lm_head,
+        layers=layers,
+        memory_k=memory_k,
+        memory_v=memory_v,
+    )
+
+    return model, token_to_id, id_to_token
 
 
 # ============================================================================
@@ -453,12 +468,9 @@ def main():
     rng = random.Random(seed)
 
     t_start_us = ggml.time_us()
-    model = GPT2Model()
 
     with ggbond.Session("cpu", n_threads=args.threads) as s:
-        token_to_id, id_to_token = gpt2_model_load(
-            args.model, model, s, args.n_ctx
-        )
+        model, token_to_id, id_to_token = gpt2_model_load(args.model, s, args.n_ctx)
         t_load_us = ggml.time_us() - t_start_us
 
         # Tokenize prompt
@@ -490,6 +502,7 @@ def main():
             embd.clear()
 
             if i >= len(embd_inp):
+                assert logits is not None
                 t_start_sample = ggml.time_us()
                 token_id = gpt_sample_top_k_top_p(
                     logits, args.top_k, args.top_p, args.temp, rng
