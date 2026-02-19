@@ -2,7 +2,7 @@
 
 ![logo](https://www.totallicensing.com/wp-content/uploads/2023/07/Winsing-to-use-1280x640.jpg)
 
-Simple and naive GGML Python binding via pybind11. Working in progress.
+*GGBond* stands for **GG**ML **Bo**u**nd**ing, is a simple and naive GGML Python binding via pybind11. Working in progress.
 
 ## Installation
 
@@ -20,15 +20,15 @@ pip install -e .
 
 GGBond provides three layers of abstraction:
 
-### Layer 1: `ggbond.ggml` — Low-level bindings
+### Layer 1: `ggbond.ggml`, Low-level bindings
 
 A near 1:1 mapping of the GGML C API. Functions follow GGML naming conventions (`new_tensor_2d`, `mul_mat`, `backend_graph_compute`, etc.). All GGML opaque pointers are wrapped as distinct Python types (`ggml.Context`, `ggml.Tensor`, `ggml.Backend`, etc.) for type safety. Use this layer when you need full control over the GGML computation model.
 
-### Layer 2: OO wrappers — `Backend`, `Context`, `Graph`, `GAllocr`
+### Layer 2: OO wrappers, `Backend`, `Context`, `Graph`, `GAllocr`
 
 Object-oriented wrappers around GGML primitives with lifecycle management (`close()` / context manager). They simplify common patterns but are **not** a complete 1:1 equivalent of the raw API — for example, `Graph` internally owns its own `Context` for graph operations, and `Context` computes memory size from `n_tensors` automatically. These are primarily used as building blocks for the higher-level API.
 
-### Layer 3: `Session` + `Tensor` — High-level API
+### Layer 3: `Session` + `Tensor`, High-level API
 
 `Session` owns a backend and manages all resource lifetimes. `Tensor` is a lazy-evaluated tensor bound to a session — operations build a computation graph, which is materialized on `compute()` or `numpy()`. GGUF model weights are loaded directly onto the target backend (CPU/Metal) without intermediate copies.
 
