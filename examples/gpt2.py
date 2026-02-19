@@ -38,6 +38,7 @@ def gpt_tokenize(vocab_token_to_id: dict[str, int], text: str) -> list[int]:
 
     tokens: list[int] = []
     for word in words:
+        word = word.replace(' ', 'Ġ').replace('\n', 'Ċ').replace('\t', 'ĉ')
         i = 0
         while i < len(word):
             best_len = 0
@@ -427,19 +428,6 @@ def gpt2_eval(
 
 
 # ============================================================================
-# Token decoding
-# ============================================================================
-
-def decode_token(token: str) -> str:
-    """Decode GGUF token string (replaces special Unicode chars with actual chars)."""
-    # GGUF uses special Unicode chars for whitespace:
-    # 'Ġ' (U+0120) -> space
-    # 'Ċ' (U+010A) -> newline
-    # 'ĉ' (U+0109) -> tab (possibly)
-    return token.replace('Ġ', ' ').replace('Ċ', '\n').replace('ĉ', '\t')
-
-
-# ============================================================================
 # Main
 # ============================================================================
 
@@ -518,7 +506,8 @@ def main():
                 i -= 1
 
             for token_id in embd:
-                print(decode_token(id_to_token.get(token_id, "")), end="", flush=True)
+                token = id_to_token.get(token_id, "").replace('Ġ', ' ').replace('Ċ', '\n').replace('ĉ', '\t')
+                print(token, end="", flush=True)
 
             if embd[-1] == 50256:
                 break
