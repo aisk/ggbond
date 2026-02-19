@@ -949,6 +949,10 @@ def gguf_get_arr_n(ctx: GGUFContext, key_id: int) -> int:
     """Get array length by key index"""
     ...
 
+def gguf_get_arr_type(ctx: GGUFContext, key_id: int) -> int:
+    """Get array element type by key index"""
+    ...
+
 def gguf_get_arr_str(ctx: GGUFContext, key_id: int, i: int) -> str:
     """Get i-th string from array by key index"""
     ...

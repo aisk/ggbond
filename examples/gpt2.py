@@ -157,53 +157,27 @@ def gpt2_model_load(
     """Load GPT-2 model from GGUF file. Returns (model, token_to_id, id_to_token)."""
     print(f"gpt2_model_load: loading model from '{fname}'")
 
-    # Initialize GGUF context to read metadata
-    gguf_ctx, _ = ggml.gguf_init_from_file(fname, no_alloc=True)
+    gguf = session.load_gguf(fname)
+    weights = gguf.weights
+    meta = gguf.meta
+    print(f"gpt2_model_load: loaded {len(weights)} tensors")
 
-    # Read hyperparameters from metadata
-    # GGUF stores these as uint32 (type=4) or float32 (type=6)
-    def get_u32(key: str) -> int | None:
-        key_id = ggml.gguf_find_key(gguf_ctx, key)
-        if key_id < 0:
-            return None
-        return ggml.gguf_get_val_u32(gguf_ctx, key_id)
-
-    def get_f32(key: str) -> float | None:
-        key_id = ggml.gguf_find_key(gguf_ctx, key)
-        if key_id < 0:
-            return None
-        return ggml.gguf_get_val_f32(gguf_ctx, key_id)
-
-    n_vocab = get_u32("gpt2.vocab_size") or 50257
-    n_embd = get_u32("gpt2.embedding_length") or 768
-    n_head = get_u32("gpt2.attention.head_count") or 12
-    n_layer = get_u32("gpt2.block_count") or 12
-    eps = get_f32("gpt2.attention.layer_norm_epsilon") or 1e-5
+    n_vocab = meta.get_u32("gpt2.vocab_size", 50257)
+    n_embd  = meta.get_u32("gpt2.embedding_length", 768)
+    n_head  = meta.get_u32("gpt2.attention.head_count", 12)
+    n_layer = meta.get_u32("gpt2.block_count", 12)
+    eps     = meta.get_f32("gpt2.attention.layer_norm_epsilon", 1e-5)
 
     print(f"gpt2_model_load: n_vocab = {n_vocab}")
     print(f"gpt2_model_load: n_embd  = {n_embd}")
     print(f"gpt2_model_load: n_head  = {n_head}")
     print(f"gpt2_model_load: n_layer = {n_layer}")
 
-    # Read vocabulary
-    token_key_id = ggml.gguf_find_key(gguf_ctx, "tokenizer.ggml.tokens")
-    if token_key_id >= 0:
-        n_tokens = ggml.gguf_get_arr_n(gguf_ctx, token_key_id)
-        token_to_id: dict[str, int] = {}
-        id_to_token: dict[int, str] = {}
-        for i in range(n_tokens):
-            token = ggml.gguf_get_arr_str(gguf_ctx, token_key_id, i)
-            token_to_id[token] = i
-            id_to_token[i] = token
-    else:
+    tokens = meta.get_arr_str("tokenizer.ggml.tokens")
+    if not tokens:
         raise ValueError("GGUF file missing tokenizer.ggml.tokens metadata")
-
-    # Free GGUF context (metadata read complete)
-    ggml.gguf_free(gguf_ctx)
-
-    # Load weight tensors (weights loaded directly to backend)
-    weights = session.load_gguf(fname)
-    print(f"gpt2_model_load: loaded {len(weights)} tensors")
+    token_to_id = {tok: i for i, tok in enumerate(tokens)}
+    id_to_token = {i: tok for i, tok in enumerate(tokens)}
 
     hp = GPT2HParams(
         n_vocab=n_vocab,

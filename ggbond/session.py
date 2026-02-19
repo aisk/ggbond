@@ -7,7 +7,7 @@ import numpy as np
 from ggbond import ggml
 from ggbond.backend import Backend
 from ggbond.context import Context
-from ggbond.gguf import load_gguf as _load_gguf
+from ggbond.gguf import load_gguf as _load_gguf, GGUF, GGUFMeta
 from ggbond.tensor import Tensor
 
 
@@ -85,16 +85,16 @@ class Session:
         self._buffers.append(buf)
         return Tensor._from_ggml(self, t, shape=shape, dtype=dtype, name=name)
 
-    def load_gguf(self, fname: str) -> dict[str, Tensor]:
-        """Load a GGUF model. Weights reside directly on the current backend."""
-        ctx_w, buf_w, raw_tensors = _load_gguf(fname, self._backend)
+    def load_gguf(self, fname: str) -> GGUF:
+        """Load a GGUF model. Returns a GGUF object with .weights and .meta."""
+        ctx_w, buf_w, raw_tensors, meta = _load_gguf(fname, self._backend)
         self._contexts.append(ctx_w)
         self._buffers.append(buf_w)
         tensors = {}
         for name, t in raw_tensors.items():
             shape = _tensor_shape(t)
             tensors[name] = Tensor._from_ggml(self, t, shape=shape, name=name)
-        return tensors
+        return GGUF(tensors, meta)
 
     def close(self):
         """Release all resources in reverse order. Safe to call multiple times."""

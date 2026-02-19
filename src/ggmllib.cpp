@@ -917,6 +917,10 @@ PYBIND11_MODULE(ggml, m) {
         return gguf_get_arr_n(static_cast<const struct gguf_context*>(ctx.ptr), key_id);
     }, "Get array length by key index", py::arg("ctx"), py::arg("key_id"));
 
+    m.def("gguf_get_arr_type", [](GGUFContextPtr ctx, int64_t key_id) {
+        return static_cast<int>(gguf_get_arr_type(static_cast<const struct gguf_context*>(ctx.ptr), key_id));
+    }, "Get array element type by key index", py::arg("ctx"), py::arg("key_id"));
+
     m.def("gguf_get_arr_str", [](GGUFContextPtr ctx, int64_t key_id, size_t i) {
         return gguf_get_arr_str(static_cast<const struct gguf_context*>(ctx.ptr), key_id, i);
     }, "Get i-th string from array by key index", py::arg("ctx"), py::arg("key_id"), py::arg("i"));

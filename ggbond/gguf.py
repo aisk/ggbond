@@ -8,15 +8,92 @@ from ggbond import ggml
 from ggbond.backend import Backend
 
 
+class GGUFMeta:
+    """Pre-fetched GGUF metadata. All values are copied out before gguf_ctx is freed."""
+
+    _TYPE_U32 = 4   # GGUF_TYPE_UINT32
+    _TYPE_I32 = 5   # GGUF_TYPE_INT32
+    _TYPE_F32 = 6   # GGUF_TYPE_FLOAT32
+    _TYPE_STR = 8   # GGUF_TYPE_STRING
+    _TYPE_ARR = 9   # GGUF_TYPE_ARRAY
+
+    def __init__(self):
+        self._scalars: dict[str, int | float | str] = {}
+        self._arr_str: dict[str, list[str]] = {}
+
+    @classmethod
+    def _from_gguf_ctx(cls, gguf_ctx) -> "GGUFMeta":
+        meta = cls()
+        n_kv = ggml.gguf_get_n_kv(gguf_ctx)
+        for i in range(n_kv):
+            key = ggml.gguf_get_key(gguf_ctx, i)
+            kv_type = ggml.gguf_get_kv_type(gguf_ctx, i)
+            if kv_type == cls._TYPE_U32:
+                meta._scalars[key] = ggml.gguf_get_val_u32(gguf_ctx, i)
+            elif kv_type == cls._TYPE_I32:
+                meta._scalars[key] = ggml.gguf_get_val_i32(gguf_ctx, i)
+            elif kv_type == cls._TYPE_F32:
+                meta._scalars[key] = ggml.gguf_get_val_f32(gguf_ctx, i)
+            elif kv_type == cls._TYPE_STR:
+                meta._scalars[key] = ggml.gguf_get_val_str(gguf_ctx, i)
+            elif kv_type == cls._TYPE_ARR:
+                if ggml.gguf_get_arr_type(gguf_ctx, i) == cls._TYPE_STR:
+                    n = ggml.gguf_get_arr_n(gguf_ctx, i)
+                    meta._arr_str[key] = [
+                        ggml.gguf_get_arr_str(gguf_ctx, i, j) for j in range(n)
+                    ]
+        return meta
+
+    def get_u32(self, key: str, default: int | None = None) -> int | None:
+        v = self._scalars.get(key)
+        return int(v) if isinstance(v, int) else default
+
+    def get_i32(self, key: str, default: int | None = None) -> int | None:
+        return self.get_u32(key, default)
+
+    def get_f32(self, key: str, default: float | None = None) -> float | None:
+        v = self._scalars.get(key)
+        return float(v) if isinstance(v, (int, float)) else default
+
+    def get_str(self, key: str, default: str | None = None) -> str | None:
+        v = self._scalars.get(key)
+        return v if isinstance(v, str) else default
+
+    def get_arr_str(self, key: str) -> list[str]:
+        return self._arr_str.get(key, [])
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._scalars or key in self._arr_str
+
+    def keys(self) -> list[str]:
+        return list(self._scalars) + list(self._arr_str)
+
+    def __repr__(self) -> str:
+        return f"GGUFMeta({len(self._scalars)} scalars, {len(self._arr_str)} arrays)"
+
+
+class GGUF:
+    """Result of loading a GGUF file: holds both tensor weights and metadata."""
+
+    def __init__(self, weights: dict, meta: GGUFMeta):
+        self.weights = weights   # dict[str, Tensor] — tensor name -> Tensor
+        self.meta = meta         # GGUFMeta — hyperparameters, vocabulary, etc.
+
+    def __repr__(self) -> str:
+        return f"GGUF(weights={len(self.weights)}, meta={self.meta!r})"
+
+
 def load_gguf(
     fname: str, backend: Backend
-) -> tuple[ggml.Context, ggml.Buffer, dict[str, ggml.Tensor]]:
-    """Load a GGUF model file and return ``(ctx_w, buf_w, tensors)``.
+) -> tuple[ggml.Context, ggml.Buffer, dict[str, ggml.Tensor], GGUFMeta]:
+    """Load a GGUF model file and return ``(ctx_w, buf_w, tensors, meta)``.
 
     The caller is responsible for freeing *ctx_w* and *buf_w* when done.
     """
     gguf_ctx, ctx_w = ggml.gguf_init_from_file(fname, no_alloc=True)
     buf_w = ggml.backend_alloc_ctx_tensors(ctx_w, backend.raw)
+
+    meta = GGUFMeta._from_gguf_ctx(gguf_ctx)
 
     n_tensors = ggml.gguf_get_n_tensors(gguf_ctx)
     data_offset = ggml.gguf_get_data_offset(gguf_ctx)
@@ -34,4 +111,4 @@ def load_gguf(
             ggml.backend_tensor_set(tensor, data, 0, nbytes)
 
     ggml.gguf_free(gguf_ctx)
-    return ctx_w, buf_w, tensors
+    return ctx_w, buf_w, tensors, meta
