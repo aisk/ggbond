@@ -11,7 +11,6 @@ from dataclasses import dataclass
 import numpy as np
 
 import ggbond
-from ggbond import ggml
 
 
 MAGIKA_LABELS = [
@@ -92,7 +91,7 @@ class Magika:
         cur = (cur @ w["dense_2/kernel:0"] + w["dense_2/bias:0"]).gelu()
 
         # global_max_pooling1d
-        cur = cur.transpose().cont().pool_1d(ggml.OpPool.MAX, 384, 384).reshape(256, n_files)
+        cur = cur.transpose().cont().max_pool_1d(384, 384).reshape(256, n_files)
 
         # layer normalization 1
         cur = cur.norm(eps=self.F_NORM_EPS) * w["layer_normalization_1/gamma:0"] + w["layer_normalization_1/beta:0"]

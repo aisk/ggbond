@@ -20,9 +20,6 @@ def main():
         if opt in ("-b", "--backend"):
             backend_type = arg.lower()
 
-    ggbond.ggml.time_init()
-    ggbond.ggml.log_set_default()
-
     matrix_a = np.array([
         [2, 8],
         [5, 1],

@@ -446,8 +446,6 @@ def main():
     parser.add_argument("--seed", type=int, default=-1, help="Random seed (-1 for random)")
     args = parser.parse_args()
 
-    ggml.time_init()
-    ggml.log_set_default()
     t_main_start_us = ggml.time_us()
 
     seed = args.seed if args.seed >= 0 else random.randint(0, 2**31)

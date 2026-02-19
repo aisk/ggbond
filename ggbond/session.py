@@ -21,6 +21,8 @@ class Session:
     """Single entry-point that owns a backend, tracks all resources, and creates Tensors."""
 
     def __init__(self, backend: str = "cpu", *, n_threads: int = 4):
+        ggml.time_init()
+        ggml.log_set_default()
         self._backend = Backend(backend, n_threads=n_threads)
         self._contexts: list = []
         self._buffers: list = []

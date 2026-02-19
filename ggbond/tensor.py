@@ -388,6 +388,9 @@ class Tensor:
             kwargs={"op_pool": op_pool, "k": k, "s": s, "p": p},
         )
 
+    def max_pool_1d(self, k: int, s: int, p: int = 0) -> Tensor:
+        return self.pool_1d(ggml.OpPool.MAX, k, s, p)
+
     # -- compute --------------------------------------------------------------
 
     def compute(self) -> Tensor:

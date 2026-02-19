@@ -2,13 +2,10 @@
 
 import numpy as np
 
-from ggbond import Tensor, ggml, Session
+from ggbond import Tensor, Session
 
 
 def main():
-    ggml.time_init()
-    ggml.log_set_default()
-
     matrix_a = np.array([
         [2, 8],
         [5, 1],
