@@ -162,18 +162,18 @@ def gpt2_model_load(
     meta = gguf.meta
     print(f"gpt2_model_load: loaded {len(weights)} tensors")
 
-    n_vocab = meta.get_u32("gpt2.vocab_size", 50257)
-    n_embd  = meta.get_u32("gpt2.embedding_length", 768)
-    n_head  = meta.get_u32("gpt2.attention.head_count", 12)
-    n_layer = meta.get_u32("gpt2.block_count", 12)
-    eps     = meta.get_f32("gpt2.attention.layer_norm_epsilon", 1e-5)
+    n_vocab = meta.get("gpt2.vocab_size", 50257)
+    n_embd  = meta.get("gpt2.embedding_length", 768)
+    n_head  = meta.get("gpt2.attention.head_count", 12)
+    n_layer = meta.get("gpt2.block_count", 12)
+    eps     = meta.get("gpt2.attention.layer_norm_epsilon", 1e-5)
 
     print(f"gpt2_model_load: n_vocab = {n_vocab}")
     print(f"gpt2_model_load: n_embd  = {n_embd}")
     print(f"gpt2_model_load: n_head  = {n_head}")
     print(f"gpt2_model_load: n_layer = {n_layer}")
 
-    tokens = meta.get_arr_str("tokenizer.ggml.tokens")
+    tokens = meta.get("tokenizer.ggml.tokens", [])
     if not tokens:
         raise ValueError("GGUF file missing tokenizer.ggml.tokens metadata")
     token_to_id = {tok: i for i, tok in enumerate(tokens)}

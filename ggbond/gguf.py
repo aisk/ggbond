@@ -44,23 +44,12 @@ class GGUFMeta:
                     ]
         return meta
 
-    def get_u32(self, key: str, default: int | None = None) -> int | None:
-        v = self._scalars.get(key)
-        return int(v) if isinstance(v, int) else default
-
-    def get_i32(self, key: str, default: int | None = None) -> int | None:
-        return self.get_u32(key, default)
-
-    def get_f32(self, key: str, default: float | None = None) -> float | None:
-        v = self._scalars.get(key)
-        return float(v) if isinstance(v, (int, float)) else default
-
-    def get_str(self, key: str, default: str | None = None) -> str | None:
-        v = self._scalars.get(key)
-        return v if isinstance(v, str) else default
-
-    def get_arr_str(self, key: str) -> list[str]:
-        return self._arr_str.get(key, [])
+    def get(self, key: str, default=None) -> int | float | str | list[str] | None:
+        if key in self._scalars:
+            return self._scalars[key]
+        if key in self._arr_str:
+            return self._arr_str[key]
+        return default
 
     def __contains__(self, key: str) -> bool:
         return key in self._scalars or key in self._arr_str
