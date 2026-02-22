@@ -1,8 +1,6 @@
 import getopt
 import sys
 
-import numpy as np
-
 import ggbond
 
 
@@ -20,29 +18,23 @@ def main():
         if opt in ("-b", "--backend"):
             backend_type = arg.lower()
 
-    matrix_a = np.array([
-        [2, 8],
-        [5, 1],
-        [4, 2],
-        [8, 6]
-    ], dtype=np.float32)
-
-    matrix_b = np.array([
-        [10, 5],
-        [9, 9],
-        [5, 4]
-    ], dtype=np.float32)
-
-    s = ggbond.Session(backend_type)
-    a = s.tensor(matrix_a)
-    b = s.tensor(matrix_b)
-    result = (a @ b).numpy()
+    with ggbond.Session(backend_type) as s:
+        a = s.tensor([
+            [2, 8],
+            [5, 1],
+            [4, 2],
+            [8, 6]
+        ])
+        b = s.tensor([
+            [10, 5],
+            [9, 9],
+            [5, 4]
+        ])
+        result = (a @ b).numpy()
 
     rows, cols = result.shape
     print(f"mul mat ({cols} x {rows}):")
     print(result)
-
-    s.close()
 
 
 if __name__ == "__main__":

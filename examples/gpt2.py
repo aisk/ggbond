@@ -11,7 +11,6 @@ Download/Convert model:
 import argparse
 import math
 import re
-import sys
 import random
 from dataclasses import dataclass
 
