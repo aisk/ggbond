@@ -94,6 +94,27 @@ class OpPool:
     AVG: OpPool
     COUNT: OpPool
 
+class GluOp:
+    """GGML GLU operation enumeration"""
+
+    REGLU: GluOp
+    GEGLU: GluOp
+    SWIGLU: GluOp
+    SWIGLU_OAI: GluOp
+    GEGLU_ERF: GluOp
+    GEGLU_QUICK: GluOp
+
+class ScaleMode:
+    """GGML interpolation mode enumeration"""
+
+    NEAREST: ScaleMode
+    BILINEAR: ScaleMode
+
+class ScaleFlag:
+    """GGML interpolation flag enumeration"""
+
+    ALIGN_CORNERS: ScaleFlag
+
 class Status:
     """GGML status enumeration"""
 
@@ -979,3 +1000,175 @@ def backend_buffer_get_size(buffer: Buffer) -> int:
 # Constants
 FILE_MAGIC: int
 QNT_VERSION_FACTOR: int
+
+def is_contiguous_rows(tensor: Tensor) -> bool:
+    """Check if tensor has contiguous rows"""
+    ...
+
+def step(ctx: Context, a: Tensor) -> Tensor:
+    """Step activation: result = (a > 0) ? 1 : 0"""
+    ...
+
+def step_inplace(ctx: Context, a: Tensor) -> Tensor:
+    """Step activation (in-place)"""
+    ...
+
+def gelu_erf(ctx: Context, a: Tensor) -> Tensor:
+    """GELU activation using ERF"""
+    ...
+
+def gelu_erf_inplace(ctx: Context, a: Tensor) -> Tensor:
+    """GELU activation using ERF (in-place)"""
+    ...
+
+def add_cast(ctx: Context, a: Tensor, b: Tensor, type: Type) -> Tensor:
+    """Element-wise addition with type casting"""
+    ...
+
+def acc(ctx: Context, a: Tensor, b: Tensor, nb1: int, nb2: int, nb3: int, offset: int) -> Tensor:
+    """Accumulate b into a view of a at offset"""
+    ...
+
+def acc_inplace(ctx: Context, a: Tensor, b: Tensor, nb1: int, nb2: int, nb3: int, offset: int) -> Tensor:
+    """Accumulate b into a view of a at offset (in-place)"""
+    ...
+
+def mul_mat_id(ctx: Context, as: Tensor, b: Tensor, ids: Tensor) -> Tensor:
+    """MoE indirect matrix multiplication"""
+    ...
+
+def geglu_erf(ctx: Context, a: Tensor) -> Tensor:
+    """GEGLU with ERF gating (fused, gate in second half)"""
+    ...
+
+def geglu_erf_swapped(ctx: Context, a: Tensor) -> Tensor:
+    """GEGLU with ERF gating (fused, gate in first half)"""
+    ...
+
+def geglu_quick(ctx: Context, a: Tensor) -> Tensor:
+    """GEGLU with quick GELU gating (fused, gate in second half)"""
+    ...
+
+def geglu_quick_swapped(ctx: Context, a: Tensor) -> Tensor:
+    """GEGLU with quick GELU gating (fused, gate in first half)"""
+    ...
+
+def reglu_split(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """ReGLU (split: a=input, b=gate)"""
+    ...
+
+def geglu_split(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """GEGLU (split: a=input, b=gate)"""
+    ...
+
+def swiglu_split(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """SwiGLU (split: a=input, b=gate)"""
+    ...
+
+def geglu_erf_split(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """GEGLU-ERF (split: a=input, b=gate)"""
+    ...
+
+def geglu_quick_split(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """GEGLU-quick (split: a=input, b=gate)"""
+    ...
+
+def swiglu_oai(ctx: Context, a: Tensor, b: Tensor, alpha: float, limit: float) -> Tensor:
+    """OpenAI SwiGLU with alpha/limit"""
+    ...
+
+def interpolate(ctx: Context, a: Tensor, ne0: int, ne1: int, ne2: int, ne3: int, mode: int) -> Tensor:
+    """Interpolate (resize) tensor to new spatial dimensions"""
+    ...
+
+def pad_ext(ctx: Context, a: Tensor, lp0: int, rp0: int, lp1: int, rp1: int, lp2: int, rp2: int, lp3: int, rp3: int) -> Tensor:
+    """Pad tensor with independent left/right padding per dimension"""
+    ...
+
+def timestep_embedding(ctx: Context, timesteps: Tensor, dim: int, max_period: int) -> Tensor:
+    """Sinusoidal timestep embedding for diffusion models"""
+    ...
+
+def im2col(ctx: Context, a: Tensor, b: Tensor, s0: int, s1: int, p0: int, p1: int, d0: int, d1: int, is_2D: bool, dst_type: Type) -> Tensor:
+    """Image-to-column transform (underlying primitive for conv)"""
+    ...
+
+def conv_1d_ph(ctx: Context, a: Tensor, b: Tensor, s: int, d: int) -> Tensor:
+    """1D convolution with half-padding"""
+    ...
+
+def conv_1d_dw(ctx: Context, a: Tensor, b: Tensor, s0: int, p0: int, d0: int) -> Tensor:
+    """Depthwise 1D convolution"""
+    ...
+
+def conv_1d_dw_ph(ctx: Context, a: Tensor, b: Tensor, s0: int, d0: int) -> Tensor:
+    """Depthwise 1D convolution with half-padding"""
+    ...
+
+def conv_transpose_1d(ctx: Context, a: Tensor, b: Tensor, s0: int, p0: int, d0: int) -> Tensor:
+    """1D transposed convolution (deconvolution)"""
+    ...
+
+def conv_2d_sk_p0(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """2D convolution with stride=kernel, padding=0 (e.g. SAM patch embed)"""
+    ...
+
+def conv_2d_s1_ph(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+    """2D convolution with stride=1, half-padding (e.g. SAM encoder)"""
+    ...
+
+def conv_2d_dw(ctx: Context, a: Tensor, b: Tensor, s0: int, s1: int, p0: int, p1: int, d0: int, d1: int) -> Tensor:
+    """Depthwise 2D convolution"""
+    ...
+
+def conv_3d(ctx: Context, a: Tensor, b: Tensor, IC: int, s0: int, s1: int, s2: int, p0: int, p1: int, p2: int, d0: int, d1: int, d2: int) -> Tensor:
+    """3D convolution"""
+    ...
+
+def win_part(ctx: Context, a: Tensor, w: int) -> Tensor:
+    """Partition tensor into non-overlapping windows of size w"""
+    ...
+
+def win_unpart(ctx: Context, a: Tensor, w0: int, h0: int, w: int) -> Tensor:
+    """Reverse window partition (reconstruct spatial tensor)"""
+    ...
+
+def get_rel_pos(ctx: Context, a: Tensor, qh: int, kh: int) -> Tensor:
+    """Slice relative position bias for given query/key heights"""
+    ...
+
+def add_rel_pos(ctx: Context, a: Tensor, pw: Tensor, ph: Tensor) -> Tensor:
+    """Add relative position bias to attention scores"""
+    ...
+
+def add_rel_pos_inplace(ctx: Context, a: Tensor, pw: Tensor, ph: Tensor) -> Tensor:
+    """Add relative position bias to attention scores (in-place)"""
+    ...
+
+def ssm_conv(ctx: Context, sx: Tensor, c: Tensor) -> Tensor:
+    """Mamba SSM convolution step"""
+    ...
+
+def ssm_scan(ctx: Context, s: Tensor, x: Tensor, dt: Tensor, A: Tensor, B: Tensor, C: Tensor, ids: Tensor) -> Tensor:
+    """Mamba SSM selective scan"""
+    ...
+
+def rwkv_wkv6(ctx: Context, k: Tensor, v: Tensor, r: Tensor, tf: Tensor, td: Tensor, state: Tensor) -> Tensor:
+    """RWKV WKV6 recurrent step"""
+    ...
+
+def rwkv_wkv7(ctx: Context, r: Tensor, w: Tensor, k: Tensor, v: Tensor, a: Tensor, b: Tensor, state: Tensor) -> Tensor:
+    """RWKV WKV7 recurrent step"""
+    ...
+
+def gated_linear_attn(ctx: Context, k: Tensor, v: Tensor, q: Tensor, g: Tensor, state: Tensor, scale: float) -> Tensor:
+    """Gated Linear Attention step"""
+    ...
+
+def opt_step_adamw(ctx: Context, a: Tensor, grad: Tensor, m: Tensor, v: Tensor, adamw_params: Tensor) -> Tensor:
+    """AdamW optimizer step"""
+    ...
+
+def opt_step_sgd(ctx: Context, a: Tensor, grad: Tensor, sgd_params: Tensor) -> Tensor:
+    """SGD optimizer step"""
+    ...
