@@ -924,4 +924,293 @@ PYBIND11_MODULE(ggml, m) {
     m.def("gguf_get_arr_str", [](GGUFContextPtr ctx, int64_t key_id, size_t i) {
         return gguf_get_arr_str(static_cast<const struct gguf_context*>(ctx.ptr), key_id, i);
     }, "Get i-th string from array by key index", py::arg("ctx"), py::arg("key_id"), py::arg("i"));
+
+    m.def("is_contiguous_rows", [](TensorPtr tensor) {
+        return ggml_is_contiguous_rows(as<ggml_tensor>(tensor));
+    }, "Check if tensor has contiguous rows", py::arg("tensor"));
+
+    m.def("step", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_step(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Step activation: result = (a > 0) ? 1 : 0", py::arg("ctx"), py::arg("a"));
+
+    m.def("step_inplace", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_step_inplace(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "Step activation (in-place)", py::arg("ctx"), py::arg("a"));
+
+    m.def("gelu_erf", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_gelu_erf(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "GELU activation using ERF", py::arg("ctx"), py::arg("a"));
+
+    m.def("gelu_erf_inplace", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_gelu_erf_inplace(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "GELU activation using ERF (in-place)", py::arg("ctx"), py::arg("a"));
+
+    m.def("add_cast", [](ContextPtr ctx, TensorPtr a, TensorPtr b, ggml_type type) {
+        return TensorPtr(ggml_add_cast(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b), type));
+    }, "Element-wise addition with type casting", py::arg("ctx"), py::arg("a"), py::arg("b"), py::arg("type"));
+
+    m.def("acc", [](ContextPtr ctx, TensorPtr a, TensorPtr b,
+                    size_t nb1, size_t nb2, size_t nb3, size_t offset) {
+        return TensorPtr(ggml_acc(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                  nb1, nb2, nb3, offset));
+    }, "Accumulate b into a view of a at offset", py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("nb1"), py::arg("nb2"), py::arg("nb3"), py::arg("offset"));
+
+    m.def("acc_inplace", [](ContextPtr ctx, TensorPtr a, TensorPtr b,
+                             size_t nb1, size_t nb2, size_t nb3, size_t offset) {
+        return TensorPtr(ggml_acc_inplace(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                          nb1, nb2, nb3, offset));
+    }, "Accumulate b into a view of a at offset (in-place)", py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("nb1"), py::arg("nb2"), py::arg("nb3"), py::arg("offset"));
+
+    m.def("mul_mat_id", [](ContextPtr ctx, TensorPtr as_t, TensorPtr b, TensorPtr ids) {
+        return TensorPtr(ggml_mul_mat_id(as<ggml_context>(ctx), as<ggml_tensor>(as_t),
+                                         as<ggml_tensor>(b), as<ggml_tensor>(ids)));
+    }, "MoE indirect matrix multiplication", py::arg("ctx"), py::arg("as"), py::arg("b"), py::arg("ids"));
+
+    // GLU variants
+    py::enum_<ggml_glu_op>(m, "GluOp")
+        .value("REGLU", GGML_GLU_OP_REGLU)
+        .value("GEGLU", GGML_GLU_OP_GEGLU)
+        .value("SWIGLU", GGML_GLU_OP_SWIGLU)
+        .value("SWIGLU_OAI", GGML_GLU_OP_SWIGLU_OAI)
+        .value("GEGLU_ERF", GGML_GLU_OP_GEGLU_ERF)
+        .value("GEGLU_QUICK", GGML_GLU_OP_GEGLU_QUICK)
+        .export_values();
+
+    m.def("geglu_erf", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_geglu_erf(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "GEGLU with ERF gating (fused, gate in second half)", py::arg("ctx"), py::arg("a"));
+
+    m.def("geglu_erf_swapped", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_geglu_erf_swapped(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "GEGLU with ERF gating (fused, gate in first half)", py::arg("ctx"), py::arg("a"));
+
+    m.def("geglu_quick", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_geglu_quick(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "GEGLU with quick GELU gating (fused, gate in second half)", py::arg("ctx"), py::arg("a"));
+
+    m.def("geglu_quick_swapped", [](ContextPtr ctx, TensorPtr a) {
+        return TensorPtr(ggml_geglu_quick_swapped(as<ggml_context>(ctx), as<ggml_tensor>(a)));
+    }, "GEGLU with quick GELU gating (fused, gate in first half)", py::arg("ctx"), py::arg("a"));
+
+    m.def("reglu_split", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_reglu_split(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "ReGLU (split: a=input, b=gate)", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("geglu_split", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_geglu_split(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "GEGLU (split: a=input, b=gate)", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("swiglu_split", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_swiglu_split(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "SwiGLU (split: a=input, b=gate)", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("geglu_erf_split", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_geglu_erf_split(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "GEGLU-ERF (split: a=input, b=gate)", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("geglu_quick_split", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_geglu_quick_split(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "GEGLU-quick (split: a=input, b=gate)", py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("swiglu_oai", [](ContextPtr ctx, TensorPtr a, TensorPtr b, float alpha, float limit) {
+        return TensorPtr(ggml_swiglu_oai(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                          alpha, limit));
+    }, "OpenAI SwiGLU with alpha/limit", py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("alpha"), py::arg("limit"));
+
+    // Interpolation and spatial ops
+    py::enum_<ggml_scale_mode>(m, "ScaleMode")
+        .value("NEAREST", GGML_SCALE_MODE_NEAREST)
+        .value("BILINEAR", GGML_SCALE_MODE_BILINEAR)
+        .export_values();
+
+    py::enum_<ggml_scale_flag>(m, "ScaleFlag")
+        .value("ALIGN_CORNERS", GGML_SCALE_FLAG_ALIGN_CORNERS)
+        .export_values();
+
+    m.def("interpolate", [](ContextPtr ctx, TensorPtr a,
+                             int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3,
+                             uint32_t mode) {
+        return TensorPtr(ggml_interpolate(as<ggml_context>(ctx), as<ggml_tensor>(a),
+                                          ne0, ne1, ne2, ne3, mode));
+    }, "Interpolate (resize) tensor to new spatial dimensions",
+       py::arg("ctx"), py::arg("a"),
+       py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"), py::arg("mode"));
+
+    m.def("pad_ext", [](ContextPtr ctx, TensorPtr a,
+                        int lp0, int rp0, int lp1, int rp1,
+                        int lp2, int rp2, int lp3, int rp3) {
+        return TensorPtr(ggml_pad_ext(as<ggml_context>(ctx), as<ggml_tensor>(a),
+                                      lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3));
+    }, "Pad tensor with independent left/right padding per dimension",
+       py::arg("ctx"), py::arg("a"),
+       py::arg("lp0"), py::arg("rp0"), py::arg("lp1"), py::arg("rp1"),
+       py::arg("lp2"), py::arg("rp2"), py::arg("lp3"), py::arg("rp3"));
+
+    m.def("timestep_embedding", [](ContextPtr ctx, TensorPtr timesteps, int dim, int max_period) {
+        return TensorPtr(ggml_timestep_embedding(as<ggml_context>(ctx), as<ggml_tensor>(timesteps),
+                                                  dim, max_period));
+    }, "Sinusoidal timestep embedding for diffusion models",
+       py::arg("ctx"), py::arg("timesteps"), py::arg("dim"), py::arg("max_period"));
+
+    // Additional convolution operations
+    m.def("im2col", [](ContextPtr ctx, TensorPtr a, TensorPtr b,
+                       int s0, int s1, int p0, int p1, int d0, int d1,
+                       bool is_2D, ggml_type dst_type) {
+        return TensorPtr(ggml_im2col(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                     s0, s1, p0, p1, d0, d1, is_2D, dst_type));
+    }, "Image-to-column transform (underlying primitive for conv)",
+       py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("s0"), py::arg("s1"), py::arg("p0"), py::arg("p1"),
+       py::arg("d0"), py::arg("d1"), py::arg("is_2D"), py::arg("dst_type"));
+
+    m.def("conv_1d_ph", [](ContextPtr ctx, TensorPtr a, TensorPtr b, int s, int d) {
+        return TensorPtr(ggml_conv_1d_ph(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                          s, d));
+    }, "1D convolution with half-padding", py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("s"), py::arg("d"));
+
+    m.def("conv_1d_dw", [](ContextPtr ctx, TensorPtr a, TensorPtr b, int s0, int p0, int d0) {
+        return TensorPtr(ggml_conv_1d_dw(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                          s0, p0, d0));
+    }, "Depthwise 1D convolution", py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("s0"), py::arg("p0"), py::arg("d0"));
+
+    m.def("conv_1d_dw_ph", [](ContextPtr ctx, TensorPtr a, TensorPtr b, int s0, int d0) {
+        return TensorPtr(ggml_conv_1d_dw_ph(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                             s0, d0));
+    }, "Depthwise 1D convolution with half-padding", py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("s0"), py::arg("d0"));
+
+    m.def("conv_transpose_1d", [](ContextPtr ctx, TensorPtr a, TensorPtr b, int s0, int p0, int d0) {
+        return TensorPtr(ggml_conv_transpose_1d(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                                 s0, p0, d0));
+    }, "1D transposed convolution (deconvolution)", py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("s0"), py::arg("p0"), py::arg("d0"));
+
+    m.def("conv_2d_sk_p0", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_conv_2d_sk_p0(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "2D convolution with stride=kernel, padding=0 (e.g. SAM patch embed)",
+       py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("conv_2d_s1_ph", [](ContextPtr ctx, TensorPtr a, TensorPtr b) {
+        return TensorPtr(ggml_conv_2d_s1_ph(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b)));
+    }, "2D convolution with stride=1, half-padding (e.g. SAM encoder)",
+       py::arg("ctx"), py::arg("a"), py::arg("b"));
+
+    m.def("conv_2d_dw", [](ContextPtr ctx, TensorPtr a, TensorPtr b,
+                            int s0, int s1, int p0, int p1, int d0, int d1) {
+        return TensorPtr(ggml_conv_2d_dw(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                          s0, s1, p0, p1, d0, d1));
+    }, "Depthwise 2D convolution",
+       py::arg("ctx"), py::arg("a"), py::arg("b"),
+       py::arg("s0"), py::arg("s1"), py::arg("p0"), py::arg("p1"), py::arg("d0"), py::arg("d1"));
+
+    m.def("conv_3d", [](ContextPtr ctx, TensorPtr a, TensorPtr b,
+                        int64_t IC,
+                        int s0, int s1, int s2,
+                        int p0, int p1, int p2,
+                        int d0, int d1, int d2) {
+        return TensorPtr(ggml_conv_3d(as<ggml_context>(ctx), as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                      IC, s0, s1, s2, p0, p1, p2, d0, d1, d2));
+    }, "3D convolution",
+       py::arg("ctx"), py::arg("a"), py::arg("b"), py::arg("IC"),
+       py::arg("s0"), py::arg("s1"), py::arg("s2"),
+       py::arg("p0"), py::arg("p1"), py::arg("p2"),
+       py::arg("d0"), py::arg("d1"), py::arg("d2"));
+
+    // Vision ops (SAM)
+    m.def("win_part", [](ContextPtr ctx, TensorPtr a, int w) {
+        return TensorPtr(ggml_win_part(as<ggml_context>(ctx), as<ggml_tensor>(a), w));
+    }, "Partition tensor into non-overlapping windows of size w",
+       py::arg("ctx"), py::arg("a"), py::arg("w"));
+
+    m.def("win_unpart", [](ContextPtr ctx, TensorPtr a, int w0, int h0, int w) {
+        return TensorPtr(ggml_win_unpart(as<ggml_context>(ctx), as<ggml_tensor>(a), w0, h0, w));
+    }, "Reverse window partition (reconstruct spatial tensor)",
+       py::arg("ctx"), py::arg("a"), py::arg("w0"), py::arg("h0"), py::arg("w"));
+
+    m.def("get_rel_pos", [](ContextPtr ctx, TensorPtr a, int qh, int kh) {
+        return TensorPtr(ggml_get_rel_pos(as<ggml_context>(ctx), as<ggml_tensor>(a), qh, kh));
+    }, "Slice relative position bias for given query/key heights",
+       py::arg("ctx"), py::arg("a"), py::arg("qh"), py::arg("kh"));
+
+    m.def("add_rel_pos", [](ContextPtr ctx, TensorPtr a, TensorPtr pw, TensorPtr ph) {
+        return TensorPtr(ggml_add_rel_pos(as<ggml_context>(ctx), as<ggml_tensor>(a),
+                                          as<ggml_tensor>(pw), as<ggml_tensor>(ph)));
+    }, "Add relative position bias to attention scores",
+       py::arg("ctx"), py::arg("a"), py::arg("pw"), py::arg("ph"));
+
+    m.def("add_rel_pos_inplace", [](ContextPtr ctx, TensorPtr a, TensorPtr pw, TensorPtr ph) {
+        return TensorPtr(ggml_add_rel_pos_inplace(as<ggml_context>(ctx), as<ggml_tensor>(a),
+                                                   as<ggml_tensor>(pw), as<ggml_tensor>(ph)));
+    }, "Add relative position bias to attention scores (in-place)",
+       py::arg("ctx"), py::arg("a"), py::arg("pw"), py::arg("ph"));
+
+    // Sequence and recurrent model ops
+    m.def("ssm_conv", [](ContextPtr ctx, TensorPtr sx, TensorPtr c) {
+        return TensorPtr(ggml_ssm_conv(as<ggml_context>(ctx), as<ggml_tensor>(sx), as<ggml_tensor>(c)));
+    }, "Mamba SSM convolution step", py::arg("ctx"), py::arg("sx"), py::arg("c"));
+
+    m.def("ssm_scan", [](ContextPtr ctx, TensorPtr s, TensorPtr x,
+                         TensorPtr dt, TensorPtr A, TensorPtr B, TensorPtr C, TensorPtr ids) {
+        return TensorPtr(ggml_ssm_scan(as<ggml_context>(ctx),
+                                        as<ggml_tensor>(s), as<ggml_tensor>(x),
+                                        as<ggml_tensor>(dt), as<ggml_tensor>(A),
+                                        as<ggml_tensor>(B), as<ggml_tensor>(C),
+                                        as<ggml_tensor>(ids)));
+    }, "Mamba SSM selective scan",
+       py::arg("ctx"), py::arg("s"), py::arg("x"),
+       py::arg("dt"), py::arg("A"), py::arg("B"), py::arg("C"), py::arg("ids"));
+
+    m.def("rwkv_wkv6", [](ContextPtr ctx, TensorPtr k, TensorPtr v,
+                           TensorPtr r, TensorPtr tf, TensorPtr td, TensorPtr state) {
+        return TensorPtr(ggml_rwkv_wkv6(as<ggml_context>(ctx),
+                                         as<ggml_tensor>(k), as<ggml_tensor>(v),
+                                         as<ggml_tensor>(r), as<ggml_tensor>(tf),
+                                         as<ggml_tensor>(td), as<ggml_tensor>(state)));
+    }, "RWKV WKV6 recurrent step",
+       py::arg("ctx"), py::arg("k"), py::arg("v"),
+       py::arg("r"), py::arg("tf"), py::arg("td"), py::arg("state"));
+
+    m.def("rwkv_wkv7", [](ContextPtr ctx, TensorPtr r, TensorPtr w,
+                           TensorPtr k, TensorPtr v, TensorPtr a, TensorPtr b, TensorPtr state) {
+        return TensorPtr(ggml_rwkv_wkv7(as<ggml_context>(ctx),
+                                         as<ggml_tensor>(r), as<ggml_tensor>(w),
+                                         as<ggml_tensor>(k), as<ggml_tensor>(v),
+                                         as<ggml_tensor>(a), as<ggml_tensor>(b),
+                                         as<ggml_tensor>(state)));
+    }, "RWKV WKV7 recurrent step",
+       py::arg("ctx"), py::arg("r"), py::arg("w"),
+       py::arg("k"), py::arg("v"), py::arg("a"), py::arg("b"), py::arg("state"));
+
+    m.def("gated_linear_attn", [](ContextPtr ctx, TensorPtr k, TensorPtr v,
+                                   TensorPtr q, TensorPtr g, TensorPtr state, float scale) {
+        return TensorPtr(ggml_gated_linear_attn(as<ggml_context>(ctx),
+                                                 as<ggml_tensor>(k), as<ggml_tensor>(v),
+                                                 as<ggml_tensor>(q), as<ggml_tensor>(g),
+                                                 as<ggml_tensor>(state), scale));
+    }, "Gated Linear Attention step",
+       py::arg("ctx"), py::arg("k"), py::arg("v"),
+       py::arg("q"), py::arg("g"), py::arg("state"), py::arg("scale"));
+
+    // Optimizer ops
+    m.def("opt_step_adamw", [](ContextPtr ctx, TensorPtr a, TensorPtr grad,
+                                TensorPtr m, TensorPtr v, TensorPtr adamw_params) {
+        return TensorPtr(ggml_opt_step_adamw(as<ggml_context>(ctx),
+                                              as<ggml_tensor>(a), as<ggml_tensor>(grad),
+                                              as<ggml_tensor>(m), as<ggml_tensor>(v),
+                                              as<ggml_tensor>(adamw_params)));
+    }, "AdamW optimizer step",
+       py::arg("ctx"), py::arg("a"), py::arg("grad"),
+       py::arg("m"), py::arg("v"), py::arg("adamw_params"));
+
+    m.def("opt_step_sgd", [](ContextPtr ctx, TensorPtr a, TensorPtr grad, TensorPtr sgd_params) {
+        return TensorPtr(ggml_opt_step_sgd(as<ggml_context>(ctx),
+                                            as<ggml_tensor>(a), as<ggml_tensor>(grad),
+                                            as<ggml_tensor>(sgd_params)));
+    }, "SGD optimizer step",
+       py::arg("ctx"), py::arg("a"), py::arg("grad"), py::arg("sgd_params"));
 }
