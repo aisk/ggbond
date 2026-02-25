@@ -177,7 +177,7 @@ def backend_tensor_get(
     ...
 
 def backend_graph_compute(backend: Backend, cgraph: Graph) -> None:
-    """Compute graph using backend"""
+    """Compute graph using backend. Raises RuntimeError if compute fails."""
     ...
 
 def backend_buffer_free(buffer: Buffer) -> None:
@@ -196,7 +196,7 @@ def backend_free(backend: Backend) -> None:
 def context_init(
     mem_size: int, mem_buffer: bytes | None = None, no_alloc: bool = False
 ) -> Context:
-    """Initialize GGML context"""
+    """Initialize GGML context. Raises MemoryError if allocation fails."""
     ...
 
 def context_free(ctx: Context) -> None:
@@ -233,21 +233,21 @@ def ftype_to_ggml_type(ftype: int) -> int:
 
 # Tensor operations
 def new_tensor_1d(ctx: Context, type: int, ne0: int) -> Tensor:
-    """Create a new 1D tensor"""
+    """Create a new 1D tensor. Raises MemoryError if allocation fails."""
     ...
 
 def new_tensor_2d(ctx: Context, type: int, ne0: int, ne1: int) -> Tensor:
-    """Create a new 2D tensor"""
+    """Create a new 2D tensor. Raises MemoryError if allocation fails."""
     ...
 
 def new_tensor_3d(ctx: Context, type: int, ne0: int, ne1: int, ne2: int) -> Tensor:
-    """Create a new 3D tensor"""
+    """Create a new 3D tensor. Raises MemoryError if allocation fails."""
     ...
 
 def new_tensor_4d(
     ctx: Context, type: int, ne0: int, ne1: int, ne2: int, ne3: int
 ) -> Tensor:
-    """Create a new 4D tensor"""
+    """Create a new 4D tensor. Raises MemoryError if allocation fails."""
     ...
 
 def get_data(tensor: Tensor) -> int:

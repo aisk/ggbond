@@ -11,6 +11,8 @@
 #endif
 
 #include <sstream>
+#include <stdexcept>
+#include <string>
 
 namespace py = pybind11;
 
@@ -45,6 +47,23 @@ using GGUFContextPtr = TypedPtr<gguf_context_tag>;
 // Type extraction helper for high-frequency struct pointer types
 template<typename T, typename Tag>
 inline T* as(const TypedPtr<Tag>& p) { return static_cast<T*>(p.ptr); }
+
+inline void* require_non_null(void* ptr, const char* api_name) {
+    if (ptr == nullptr) {
+        PyErr_Format(PyExc_MemoryError, "%s returned nullptr", api_name);
+        throw py::error_already_set();
+    }
+    return ptr;
+}
+
+inline void throw_if_compute_failed(ggml_status status, const char* api_name) {
+    if (status != GGML_STATUS_SUCCESS) {
+        std::ostringstream oss;
+        oss << api_name << " failed: " << ggml_status_to_string(status)
+            << " (status=" << static_cast<int>(status) << ")";
+        throw std::runtime_error(oss.str());
+    }
+}
 
 #define REGISTER_PTR(Alias, Name) \
     py::class_<Alias>(m, Name) \
@@ -133,19 +152,19 @@ PYBIND11_MODULE(ggml, m) {
     m.attr("QNT_VERSION_FACTOR") = GGML_QNT_VERSION_FACTOR;
     m.def("context_init", [](size_t mem_size, void* mem_buffer = nullptr, bool no_alloc = false) {
         ggml_init_params params = {mem_size, mem_buffer, no_alloc};
-        return ContextPtr(ggml_init(params));
+        return ContextPtr(require_non_null(ggml_init(params), "ggml_init"));
     }, "Initialize GGML context", py::arg("mem_size"), py::arg("mem_buffer") = nullptr, py::arg("no_alloc") = false);
     m.def("new_tensor_1d", [](ContextPtr ctx, ggml_type type, int64_t ne0) {
-        return TensorPtr(ggml_new_tensor_1d(as<ggml_context>(ctx), type, ne0));
+        return TensorPtr(require_non_null(ggml_new_tensor_1d(as<ggml_context>(ctx), type, ne0), "ggml_new_tensor_1d"));
     }, "Create a new 1D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"));
     m.def("new_tensor_2d", [](ContextPtr ctx, ggml_type type, int64_t ne0, int64_t ne1) {
-        return TensorPtr(ggml_new_tensor_2d(as<ggml_context>(ctx), type, ne0, ne1));
+        return TensorPtr(require_non_null(ggml_new_tensor_2d(as<ggml_context>(ctx), type, ne0, ne1), "ggml_new_tensor_2d"));
     }, "Create a new 2D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"), py::arg("ne1"));
     m.def("new_tensor_3d", [](ContextPtr ctx, ggml_type type, int64_t ne0, int64_t ne1, int64_t ne2) {
-        return TensorPtr(ggml_new_tensor_3d(as<ggml_context>(ctx), type, ne0, ne1, ne2));
+        return TensorPtr(require_non_null(ggml_new_tensor_3d(as<ggml_context>(ctx), type, ne0, ne1, ne2), "ggml_new_tensor_3d"));
     }, "Create a new 3D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"));
     m.def("new_tensor_4d", [](ContextPtr ctx, ggml_type type, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
-        return TensorPtr(ggml_new_tensor_4d(as<ggml_context>(ctx), type, ne0, ne1, ne2, ne3));
+        return TensorPtr(require_non_null(ggml_new_tensor_4d(as<ggml_context>(ctx), type, ne0, ne1, ne2, ne3), "ggml_new_tensor_4d"));
     }, "Create a new 4D tensor", py::arg("ctx"), py::arg("type"), py::arg("ne0"), py::arg("ne1"), py::arg("ne2"), py::arg("ne3"));
     m.def("type_size", &ggml_type_size, "Get size in bytes for all elements in a block of the given type", py::arg("type"));
     m.def("blck_size", &ggml_blck_size, "Get block size (number of elements per block) for the given type", py::arg("type"));
@@ -500,7 +519,11 @@ PYBIND11_MODULE(ggml, m) {
 
     // Backend graph computation
     m.def("backend_graph_compute", [](BackendPtr backend, GraphPtr cgraph) {
-        ggml_backend_graph_compute(static_cast<ggml_backend_t>(backend.ptr), as<ggml_cgraph>(cgraph));
+        const ggml_status status = ggml_backend_graph_compute(
+            static_cast<ggml_backend_t>(backend.ptr),
+            as<ggml_cgraph>(cgraph)
+        );
+        throw_if_compute_failed(status, "ggml_backend_graph_compute");
     }, "Compute graph using backend", py::arg("backend"), py::arg("cgraph"));
 
     // Backend tensor get
