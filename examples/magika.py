@@ -63,7 +63,7 @@ class Magika:
 
     def __init__(self, model_path: str, *, backend: str = "cpu"):
         self._session = ggbond.Session(backend)
-        self._weights = self._session.load_gguf(model_path)
+        self._gguf = self._session.load_gguf(model_path)
 
     def predict(self, files: list[str], *, top_k: int = 5) -> list[list[Prediction]]:
         """Predict file types for a list of files.
@@ -73,7 +73,7 @@ class Magika:
         n_files = len(files)
         input_data = np.concatenate([self._preprocess_file(f) for f in files])
         inp = self._session.tensor(input_data.reshape(n_files, self.INP_BYTES, 257))
-        w = self._weights
+        w = self._gguf.weights
 
         # dense
         cur = (inp @ w["dense/kernel:0"] + w["dense/bias:0"]).gelu()
