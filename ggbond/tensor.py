@@ -406,33 +406,27 @@ class Tensor:
         # All leaves are backend-resident, map directly
         ggml_map = {id(leaf): leaf._ggml_tensor for leaf in leaves}
 
-        # Build Graph
+        # Build graph, allocate, compute and extract with exception-safe cleanup.
         n_ops = sum(1 for n in ordered if n._op is not None)
-        g = Graph(max_nodes=n_ops * 2 + 10)
+        with Graph(max_nodes=n_ops * 2 + 10) as g:
+            for node in ordered:
+                if node._op is None:
+                    continue
+                ggml_inputs = [ggml_map[id(inp)] for inp in node._inputs]
+                ggml_result = _materialize_op(node._op, g.ctx, ggml_inputs, node._kwargs)
+                if node._name:
+                    ggml.set_name(ggml_result, node._name)
+                ggml_map[id(node)] = ggml_result
 
-        for node in ordered:
-            if node._op is None:
-                continue
-            ggml_inputs = [ggml_map[id(inp)] for inp in node._inputs]
-            ggml_result = _materialize_op(node._op, g.ctx, ggml_inputs, node._kwargs)
-            if node._name:
-                ggml.set_name(ggml_result, node._name)
-            ggml_map[id(node)] = ggml_result
+            result_ggml = ggml_map[id(self)]
+            ggml.set_output(result_ggml)
+            g.build_forward(result_ggml)
 
-        result_ggml = ggml_map[id(self)]
-        ggml.set_output(result_ggml)
-        g.build_forward(result_ggml)
-
-        # Allocate, compute, extract
-        allocr = GAllocr(backend)
-        allocr.reserve(g.raw)
-        allocr.alloc(g.raw)
-        backend.compute(g.raw)
-
-        self._cached = backend.tensor_get(result_ggml)
-
-        allocr.close()
-        g.close()
+            with GAllocr(backend) as allocr:
+                allocr.reserve(g.raw)
+                allocr.alloc(g.raw)
+                backend.compute(g.raw)
+                self._cached = backend.tensor_get(result_ggml)
         return self
 
     def numpy(self) -> np.ndarray:
