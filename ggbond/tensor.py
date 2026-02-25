@@ -161,6 +161,16 @@ def _infer_shape(op: str, inputs: tuple[Tensor, ...], kwargs: dict) -> tuple[int
     return inputs[0]._shape
 
 
+def _ensure_same_session(inputs: tuple[Tensor, ...]) -> None:
+    """Validate all input tensors are bound to the same Session."""
+    if not inputs:
+        raise ValueError("inputs must not be empty")
+    base_session = inputs[0]._session
+    for tensor in inputs[1:]:
+        if tensor._session is not base_session:
+            raise ValueError("all Tensor inputs must belong to the same Session")
+
+
 class Tensor:
     """Lazy tensor that records operations and materializes on ``.compute()``."""
 
@@ -193,6 +203,7 @@ class Tensor:
         dtype=None,
         kwargs: dict | None = None,
     ) -> Tensor:
+        _ensure_same_session(inputs)
         obj = object.__new__(cls)
         obj._session = inputs[0]._session
         obj._ggml_tensor = None
