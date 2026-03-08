@@ -25,17 +25,17 @@ CMAKE_ARGS="-DGGML_HIP=ON" pip install -e .
 
 ## Architecture
 
-GGBond provides three layers of abstraction:
+GGBond provides three API styles:
 
-### Layer 1: `ggbond.ggml`, Low-level bindings
+### C API mapping: `ggbond.ggml`
 
-A near 1:1 mapping of the GGML C API. Functions follow GGML naming conventions (`new_tensor_2d`, `mul_mat`, `backend_graph_compute`, etc.). All GGML opaque pointers are wrapped as distinct Python types (`ggml.Context`, `ggml.Tensor`, `ggml.Backend`, etc.) for type safety. Use this layer when you need full control over the GGML computation model.
+A near 1:1 mapping of the GGML C API. Functions follow GGML naming conventions (`new_tensor_2d`, `mul_mat`, `backend_graph_compute`, etc.). All GGML opaque pointers are wrapped as distinct Python types (`ggml.Context`, `ggml.Tensor`, `ggml.Backend`, etc.) for type safety. Use this API when you need full control over the GGML computation model.
 
-### Layer 2: OO wrappers, `Backend`, `Context`, `Graph`, `GAllocr`
+### Object-oriented wrapper API: `Backend`, `Context`, `Graph`, `GAllocr`
 
-Object-oriented wrappers around GGML primitives with lifecycle management (`close()` / context manager). They simplify common patterns but are **not** a complete 1:1 equivalent of the raw API — for example, `Graph` internally owns its own `Context` for graph operations, and `Context` computes memory size from `n_tensors` automatically. These are primarily used as building blocks for the higher-level API.
+An object-oriented wrapper around GGML primitives with lifecycle management (`close()` / context manager). This API is suitable for production use when you want explicit control of context/graph/backend lifecycles with less boilerplate than the raw API. It is **not** a complete 1:1 equivalent of the C API mapping — for example, `Graph` internally owns its own `Context`, and `Context` computes memory size from `n_tensors` automatically. Compared with the tensor API, it exposes lower-level control and fewer convenience abstractions.
 
-### Layer 3: `Session` + `Tensor`, High-level API
+### Tensor API: `Session` + `Tensor`
 
 `Session` owns a backend and manages all resource lifetimes. `Tensor` is a lazy-evaluated tensor bound to a session — operations build a computation graph, which is materialized on `compute()` or `numpy()`. GGUF model weights are loaded directly onto the target backend (CPU/Metal/HIP) without intermediate copies.
 
