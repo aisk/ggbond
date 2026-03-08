@@ -47,11 +47,10 @@ Supported backends:
 ## Quick Start
 
 ```python
-import numpy as np
 import ggbond
 
-matrix_a = np.array([[2, 8], [5, 1], [4, 2], [8, 6]], dtype=np.float32)
-matrix_b = np.array([[10, 5], [9, 9], [5, 4]], dtype=np.float32)
+matrix_a = [[2, 8], [5, 1], [4, 2], [8, 6]]
+matrix_b = [[10, 5], [9, 9], [5, 4]]
 
 s = ggbond.Session("cpu")
 a = s.tensor(matrix_a)
@@ -63,7 +62,11 @@ s.close()
 `Tensor` can also be instantiated directly, but `session` must be passed explicitly:
 
 ```python
+import ggbond
+
 s = ggbond.Session("cpu")
+matrix_a = [[2, 8], [5, 1], [4, 2], [8, 6]]
+matrix_b = [[10, 5], [9, 9], [5, 4]]
 a = ggbond.Tensor(matrix_a, session=s)
 b = ggbond.Tensor(matrix_b, session=s)
 print((a @ b).numpy())
