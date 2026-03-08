@@ -60,6 +60,16 @@ print((a @ b).numpy())
 s.close()
 ```
 
+`Tensor` can also be instantiated directly, but `session` must be passed explicitly:
+
+```python
+s = ggbond.Session("cpu")
+a = ggbond.Tensor(matrix_a, session=s)
+b = ggbond.Tensor(matrix_b, session=s)
+print((a @ b).numpy())
+s.close()
+```
+
 ## Examples
 
 - [`examples/simple.py`](examples/simple.py) — Matrix multiplication

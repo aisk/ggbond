@@ -21,6 +21,16 @@ _GGML_TO_NP = {
     ggml.Type.F64: np.float64,
 }
 
+_NP_DTYPE = {
+    ggml.Type.F32: np.float32,
+    ggml.Type.F16: np.float16,
+    ggml.Type.I32: np.int32,
+    ggml.Type.I8: np.int8,
+    ggml.Type.I16: np.int16,
+    ggml.Type.I64: np.int64,
+    ggml.Type.F64: np.float64,
+}
+
 # Simple unary ops: method_name → ggml function name
 _UNARY_OPS = (
     "relu", "gelu", "silu", "sigmoid", "tanh",
@@ -179,6 +189,58 @@ class Tensor:
         "_dtype", "_shape", "_name", "_cached",
         "_session", "_ggml_tensor",
     )
+
+    def __init__(
+        self,
+        data,
+        *,
+        session,
+        dtype=None,
+        shape=None,
+        name: str | None = None,
+    ):
+        """Create a backend-resident leaf tensor bound to an explicit session."""
+        if session is None:
+            raise ValueError("session must be explicitly provided")
+
+        if dtype is None:
+            dtype = ggml.Type.F32
+        np_dtype = _NP_DTYPE.get(dtype, np.float32)
+
+        if isinstance(data, bytes):
+            raw_bytes = data
+            if shape is None:
+                raise ValueError("shape is required when data is raw bytes")
+            shape = tuple(shape)
+        else:
+            data = np.asarray(data, dtype=np_dtype)
+            raw_bytes = None
+            if shape is None:
+                shape = tuple(reversed(data.shape))
+            else:
+                shape = tuple(shape)
+
+        ctx = Context(n_tensors=1)
+        t = ctx.new_tensor(dtype, *shape, name=name)
+        ggml.set_input(t)
+        buf = session._backend.alloc_ctx(ctx)
+        if raw_bytes is not None:
+            ggml.backend_tensor_set(t, np.frombuffer(raw_bytes, dtype=np.uint8), 0, len(raw_bytes))
+        else:
+            session._backend.tensor_set(t, data)
+
+        session._contexts.append(ctx)
+        session._buffers.append(buf)
+
+        self._session = session
+        self._ggml_tensor = t
+        self._op = None
+        self._inputs = ()
+        self._kwargs = {}
+        self._dtype = dtype
+        self._shape = shape
+        self._name = name
+        self._cached = None
 
     @classmethod
     def _from_ggml(cls, session, ggml_tensor, shape, dtype=None, name=None):
