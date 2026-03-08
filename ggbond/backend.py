@@ -11,18 +11,25 @@ from ggbond.context import Context
 
 
 class Backend:
-    """Wraps a ggml backend (CPU or Metal) with context-manager support."""
+    """Wraps a ggml backend (CPU, Metal, or HIP) with context-manager support."""
 
     def __init__(self, name: str = "cpu", *, n_threads: int = 4):
         name = name.lower()
+        if name == "rocm":
+            name = "hip"
+
         if name == "metal":
             if platform.system() != "Darwin":
                 raise RuntimeError("Metal backend is only available on macOS")
             self._backend = ggml.backend_metal_init()
+        elif name == "hip":
+            if not hasattr(ggml, "backend_cuda_init"):
+                raise RuntimeError("HIP backend is not available in this build (rebuild with GGML_HIP=ON)")
+            self._backend = ggml.backend_cuda_init(0)
         elif name == "cpu":
             self._backend = ggml.backend_cpu_init()
         else:
-            raise ValueError(f"unknown backend: {name!r} (use 'cpu' or 'metal')")
+            raise ValueError(f"unknown backend: {name!r} (use 'cpu', 'metal', 'hip', or 'rocm')")
 
         if not self._backend:
             raise RuntimeError(f"failed to initialize {name} backend")

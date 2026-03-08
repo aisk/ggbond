@@ -10,7 +10,7 @@ def main():
         opts, args = getopt.getopt(sys.argv[1:], "b:", ["backend="])
     except getopt.GetoptError as err:
         print(f"Error: {err}")
-        print("Usage: python simple.py [-b|--backend cpu|metal]")
+        print("Usage: python simple.py [-b|--backend cpu|metal|hip]")
         sys.exit(1)
 
     backend_type = "cpu"

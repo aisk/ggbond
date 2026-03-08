@@ -1,7 +1,7 @@
 """Magika file type detector using ggbond Tensor API.
 
 Usage:
-    python examples/magika.py <model.gguf> <file1> [file2 ...] [--backend cpu|metal]
+    python examples/magika.py <model.gguf> <file1> [file2 ...] [--backend cpu|metal|hip]
 """
 
 import argparse
@@ -172,7 +172,7 @@ def main():
     parser = argparse.ArgumentParser(description="Magika file type detector")
     parser.add_argument("model_path", help="Path to magika GGUF model")
     parser.add_argument("files", nargs="+", help="Files or directories to classify")
-    parser.add_argument("-b", "--backend", default="cpu", choices=["cpu", "metal"],
+    parser.add_argument("-b", "--backend", default="cpu", choices=["cpu", "metal", "hip"],
                         help="Backend to use (default: cpu)")
     args = parser.parse_args()
 

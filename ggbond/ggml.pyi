@@ -139,6 +139,15 @@ def backend_cpu_set_n_threads(backend: Backend, n_threads: int) -> None:
     """Set number of threads for CPU backend"""
     ...
 
+# CUDA-like backend functions (CUDA/HIP/MUSA, when enabled at build time)
+def backend_cuda_init(device: int = 0) -> Backend:
+    """Initialize CUDA-like backend (CUDA/HIP/MUSA)"""
+    ...
+
+def backend_is_cuda(backend: Backend) -> bool:
+    """Check if backend is CUDA-like backend"""
+    ...
+
 # Metal backend functions (macOS only)
 def backend_metal_init() -> Backend:
     """Initialize Metal backend (macOS only)"""

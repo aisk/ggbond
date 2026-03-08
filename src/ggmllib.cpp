@@ -6,6 +6,9 @@
 #include <ggml-backend.h>
 #include <ggml-alloc.h>
 #include <gguf.h>
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+#include <ggml-cuda.h>
+#endif
 #ifdef __APPLE__
 #include <ggml-metal.h>
 #endif
@@ -134,6 +137,12 @@ PYBIND11_MODULE(ggml, m) {
     m.def("backend_cpu_init", []() { return BackendPtr(ggml_backend_cpu_init()); }, "Initialize CPU backend");
     m.def("backend_is_cpu", [](BackendPtr backend) { return ggml_backend_is_cpu(static_cast<ggml_backend_t>(backend.ptr)); }, "Check if backend is CPU backend", py::arg("backend"));
     m.def("backend_cpu_set_n_threads", [](BackendPtr backend, int n_threads) { ggml_backend_cpu_set_n_threads(static_cast<ggml_backend_t>(backend.ptr), n_threads); }, "Set number of threads for CPU backend", py::arg("backend"), py::arg("n_threads"));
+
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+    // CUDA-like backend functions (CUDA / HIP / MUSA)
+    m.def("backend_cuda_init", [](int device) { return BackendPtr(ggml_backend_cuda_init(device)); }, "Initialize CUDA-like backend (CUDA/HIP/MUSA)", py::arg("device") = 0);
+    m.def("backend_is_cuda", [](BackendPtr backend) { return ggml_backend_is_cuda(static_cast<ggml_backend_t>(backend.ptr)); }, "Check if backend is CUDA-like backend", py::arg("backend"));
+#endif
 
 #ifdef __APPLE__
     // Metal backend functions (macOS only)

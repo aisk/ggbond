@@ -629,7 +629,7 @@ def main():
                         default=["a photo of a cat", "a photo of a dog",
                                  "a photo of a person", "a landscape photo"],
                         help="Text prompts to rank against the image")
-    parser.add_argument("--backend", type=str, default="cpu", choices=["cpu", "metal"],
+    parser.add_argument("--backend", type=str, default="cpu", choices=["cpu", "metal", "hip"],
                         help="Backend to use")
     parser.add_argument("-t", "--threads", type=int, default=4,
                         help="Number of CPU threads")

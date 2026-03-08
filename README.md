@@ -10,11 +10,18 @@
 pip install -e .
 ```
 
+Enable HIP backend at build time:
+
+```bash
+CMAKE_ARGS="-DGGML_HIP=ON" pip install -e .
+```
+
 ## Requirements
 
 - Python 3.10+
 - CMake 3.15+
 - C++17 compatible compiler
+- ROCm/HIP toolchain (only for `hip` backend)
 
 ## Architecture
 
@@ -30,7 +37,12 @@ Object-oriented wrappers around GGML primitives with lifecycle management (`clos
 
 ### Layer 3: `Session` + `Tensor`, High-level API
 
-`Session` owns a backend and manages all resource lifetimes. `Tensor` is a lazy-evaluated tensor bound to a session — operations build a computation graph, which is materialized on `compute()` or `numpy()`. GGUF model weights are loaded directly onto the target backend (CPU/Metal) without intermediate copies.
+`Session` owns a backend and manages all resource lifetimes. `Tensor` is a lazy-evaluated tensor bound to a session — operations build a computation graph, which is materialized on `compute()` or `numpy()`. GGUF model weights are loaded directly onto the target backend (CPU/Metal/HIP) without intermediate copies.
+
+Supported backends:
+- `cpu` (always available)
+- `metal` (macOS only)
+- `hip` (requires build with `GGML_HIP=ON`; alias: `rocm`)
 
 ## Quick Start
 

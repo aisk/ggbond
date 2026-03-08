@@ -50,7 +50,7 @@ A near 1:1 mapping of the GGML C API exposed via pybind11 (`src/ggmllib.cpp`).
 
 Object-oriented wrappers (`ggbond/backend.py`, `context.py`, `graph.py`) around GGML primitives with lifecycle management (`close()` / context manager). They simplify common patterns but are **not** a complete 1:1 equivalent of the raw API:
 
-- **`Backend`** (`backend.py`): Wraps CPU/Metal backend init, provides `alloc_ctx()`, `compute()`, `tensor_set()`, `tensor_get()`
+- **`Backend`** (`backend.py`): Wraps CPU/Metal/HIP backend init, provides `alloc_ctx()`, `compute()`, `tensor_set()`, `tensor_get()`
 - **`Context`** (`context.py`): Wraps `ggml_context` with auto-sized memory from `n_tensors`, provides `new_tensor()` dispatching to `new_tensor_{1..4}d`
 - **`Graph`** (`graph.py`): Owns its own `Context` for graph ops, exposes convenience methods (`g.add(a, b)`) and direct access via `g.ctx`
 - **`GAllocr`** (`graph.py`): Wraps `ggml_gallocr` for graph memory allocation
@@ -87,7 +87,7 @@ Key implementation details:
 | `ggbond/__init__.py` | Package init, exports `Session`, `Tensor`, `ggml` |
 | `ggbond/session.py` | High-level `Session` class |
 | `ggbond/tensor.py` | Lazy `Tensor` with operator overloading |
-| `ggbond/backend.py` | `Backend` wrapper (CPU/Metal) |
+| `ggbond/backend.py` | `Backend` wrapper (CPU/Metal/HIP) |
 | `ggbond/context.py` | `Context` wrapper |
 | `ggbond/graph.py` | `Graph` and `GAllocr` wrappers |
 | `ggbond/gguf.py` | GGUF model file loading |
@@ -120,3 +120,4 @@ The `Tensor` high-level API (Layer 3) handles both phases automatically.
 
 - **CPU**: `Backend("cpu")` or `Session("cpu")` — always available
 - **Metal**: `Backend("metal")` or `Session("metal")` — macOS only, GPU acceleration
+- **HIP**: `Backend("hip")` / `Backend("rocm")` or `Session("hip")` — requires build with `GGML_HIP=ON`
