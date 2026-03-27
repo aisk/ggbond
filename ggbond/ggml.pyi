@@ -148,6 +148,18 @@ def backend_is_cuda(backend: Backend) -> bool:
     """Check if backend is CUDA-like backend"""
     ...
 
+def backend_cuda_get_device_count() -> int:
+    """Get number of CUDA devices"""
+    ...
+
+def backend_cuda_get_device_description(device: int = 0) -> str:
+    """Get CUDA device description string"""
+    ...
+
+def backend_cuda_get_device_memory(device: int = 0) -> tuple[int, int]:
+    """Get CUDA device memory (free, total) in bytes"""
+    ...
+
 # Metal backend functions (macOS only)
 def backend_metal_init() -> Backend:
     """Initialize Metal backend (macOS only)"""

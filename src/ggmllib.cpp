@@ -142,6 +142,17 @@ PYBIND11_MODULE(ggml, m) {
     // CUDA-like backend functions (CUDA / HIP / MUSA)
     m.def("backend_cuda_init", [](int device) { return BackendPtr(ggml_backend_cuda_init(device)); }, "Initialize CUDA-like backend (CUDA/HIP/MUSA)", py::arg("device") = 0);
     m.def("backend_is_cuda", [](BackendPtr backend) { return ggml_backend_is_cuda(static_cast<ggml_backend_t>(backend.ptr)); }, "Check if backend is CUDA-like backend", py::arg("backend"));
+    m.def("backend_cuda_get_device_count", []() { return ggml_backend_cuda_get_device_count(); }, "Get number of CUDA devices");
+    m.def("backend_cuda_get_device_description", [](int device) {
+        char desc[256];
+        ggml_backend_cuda_get_device_description(device, desc, sizeof(desc));
+        return std::string(desc);
+    }, "Get CUDA device description string", py::arg("device") = 0);
+    m.def("backend_cuda_get_device_memory", [](int device) {
+        size_t free = 0, total = 0;
+        ggml_backend_cuda_get_device_memory(device, &free, &total);
+        return std::make_tuple(free, total);
+    }, "Get CUDA device memory (free, total) in bytes", py::arg("device") = 0);
 #endif
 
 #ifdef __APPLE__

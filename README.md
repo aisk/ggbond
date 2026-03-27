@@ -10,6 +10,12 @@
 pip install -e .
 ```
 
+Enable CUDA backend at build time:
+
+```bash
+CMAKE_ARGS="-DGGML_CUDA=ON" pip install -e .
+```
+
 Enable HIP backend at build time:
 
 ```bash
@@ -21,6 +27,7 @@ CMAKE_ARGS="-DGGML_HIP=ON" pip install -e .
 - Python 3.10+
 - CMake 3.15+
 - C++17 compatible compiler
+- CUDA Toolkit (only for `cuda` backend)
 - ROCm/HIP toolchain (only for `hip` backend)
 
 ## Architecture
@@ -41,6 +48,7 @@ An object-oriented wrapper around GGML primitives with lifecycle management (`cl
 
 Supported backends:
 - `cpu` (always available)
+- `cuda` (requires build with `GGML_CUDA=ON`; NVIDIA GPU)
 - `metal` (macOS only)
 - `hip` (requires build with `GGML_HIP=ON`; alias: `rocm`)
 
@@ -78,6 +86,9 @@ s.close()
 - [`examples/simple.py`](examples/simple.py) — Matrix multiplication
 - [`examples/magika.py`](examples/magika.py) — File type detection with Magika
 - [`examples/gpt2.py`](examples/gpt2.py) — GPT-2 text generation
+- [`examples/clip.py`](examples/clip.py) — CLIP image-text similarity
+
+Examples support `--backend` / `-b` flag to select backend (e.g. `-b cuda`).
 
 ## License
 

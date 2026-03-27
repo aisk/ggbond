@@ -18,10 +18,10 @@ def _tensor_shape(t: ggml.Tensor) -> tuple[int, ...]:
 class Session:
     """Single entry-point that owns a backend, tracks all resources, and creates Tensors."""
 
-    def __init__(self, backend: str = "cpu", *, n_threads: int = 4):
+    def __init__(self, backend: str = "cpu", *, n_threads: int = 4, device: int = 0):
         ggml.time_init()
         ggml.log_set_default()
-        self._backend = Backend(backend, n_threads=n_threads)
+        self._backend = Backend(backend, n_threads=n_threads, device=device)
         self._contexts: list = []
         self._buffers: list = []
 
@@ -63,16 +63,16 @@ class Session:
 
     def close(self):
         """Release all resources in reverse order. Safe to call multiple times."""
-        for ctx in reversed(self._contexts):
+        for ctx in reversed(getattr(self, '_contexts', [])):
             if isinstance(ctx, Context):
                 ctx.close()
             else:
                 ggml.context_free(ctx)
-        self._contexts.clear()
-        for buf in reversed(self._buffers):
+        self._contexts = []
+        for buf in reversed(getattr(self, '_buffers', [])):
             ggml.backend_buffer_free(buf)
-        self._buffers.clear()
-        if self._backend:
+        self._buffers = []
+        if getattr(self, '_backend', None):
             self._backend.close()
             self._backend = None
 
