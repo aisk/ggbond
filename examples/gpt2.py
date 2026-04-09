@@ -416,6 +416,8 @@ def main():
     parser.add_argument("--n-ctx", type=int, default=1024, help="Context size")
     parser.add_argument("--n-batch", type=int, default=32, help="Batch size for prompt processing")
     parser.add_argument("-t", "--threads", type=int, default=4, help="Number of threads")
+    parser.add_argument("-b", "--backend", type=str, default="cpu", help="Backend to use (cpu, cuda, metal, hip)")
+    parser.add_argument("--device", type=int, default=0, help="GPU device index (for cuda/hip)")
     parser.add_argument("--top-k", type=int, default=40, help="Top-k sampling")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p sampling")
     parser.add_argument("--temp", type=float, default=1.0, help="Temperature")
@@ -430,7 +432,7 @@ def main():
 
     t_start_us = ggml.time_us()
 
-    with ggbond.Session("cpu", n_threads=args.threads) as s:
+    with ggbond.Session(args.backend, n_threads=args.threads, device=args.device) as s:
         model, token_to_id, id_to_token = gpt2_model_load(args.model, s, args.n_ctx)
         t_load_us = ggml.time_us() - t_start_us
 
