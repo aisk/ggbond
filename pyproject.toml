@@ -1,9 +1,6 @@
 [build-system]
-requires = [
-    "scikit-build-core",
-    "pybind11",
-]
-build-backend = "scikit_build_core.build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "ggbond"
@@ -27,7 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "numpy"
+    "ggml-python>=0.0.38",
+    "numpy",
 ]
 
 [project.optional-dependencies]
@@ -38,24 +36,5 @@ dev = [
 Homepage = "https://github.com/aisk/ggbond"
 "Bug Tracker" = "https://github.com/aisk/ggbond/issues"
 
-[tool.scikit-build]
-cmake.version = ">=3.15"
-cmake.args = []
-wheel.py-api = "cp310"
-wheel.expand-macos-universal-tags = true
-install.components = ["ggbond"]
-
-# Set the minimum CMake version
-cmake.minimum-version = "3.15"
-
-# Build directory
-build-dir = "build/{wheel_tag}"
-
-# Logging level (0: error, 1: warning, 2: info, 3: debug)
-logging.level = "INFO"
-
-# CMake build type
-cmake.build-type = "Release"
-
-# Whether to editable install
-editable.verbose = true
+[tool.hatch.build.targets.wheel]
+packages = ["ggbond"]
