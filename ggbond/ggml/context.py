@@ -49,7 +49,24 @@ class Context:
         params = _ggml.ggml_init_params(mem_size, mem_buffer, no_alloc)
         self.ptr = nonnull(_ggml.ggml_init(params), "ggml_init")
         self.no_alloc = no_alloc
+        self._owns = True
         self._closed = False
+
+    @classmethod
+    def from_ptr(cls, ptr, *, no_alloc: bool = True, owns: bool = True) -> "Context":
+        """Wrap an externally created ``ggml_context``.
+
+        Used for contexts allocated outside this class (e.g. the metadata
+        context filled in by ``gguf_init_from_file``). When ``owns`` is True the
+        context is freed on :meth:`close`; set it False to wrap a context whose
+        lifetime is managed elsewhere.
+        """
+        self = cls.__new__(cls)
+        self.ptr = nonnull(ptr, "ggml_context")
+        self.no_alloc = no_alloc
+        self._owns = owns
+        self._closed = False
+        return self
 
     # -- tensor factories ---------------------------------------------------
 
@@ -101,7 +118,8 @@ class Context:
 
     def close(self) -> None:
         if not self._closed and self.ptr is not None:
-            _ggml.ggml_free(self.ptr)
+            if self._owns:
+                _ggml.ggml_free(self.ptr)
             self._closed = True
             self.ptr = None
 
