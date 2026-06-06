@@ -7,14 +7,23 @@ Computation is explicit and two-phase -- nothing is lazy.
 Typical CPU flow::
 
     import numpy as np
-    from ggbond.ggml import Context, F32
+    from ggbond.ggml import Context, Backend, GAllocr, F32
 
-    with Context(mem_size=16 * 1024 * 1024, no_alloc=False) as ctx:
-        a = ctx.tensor_from_numpy(np.random.rand(4, 3).astype(np.float32))
-        b = ctx.tensor_from_numpy(np.random.rand(2, 3).astype(np.float32))
-        c = a.mul_mat(b)
-        ctx.new_graph().build_forward_expand(c).compute_with_ctx(n_threads=4)
-        print(c.numpy())
+    with Backend("cpu", n_threads=4) as be, \\
+         Context(mem_size=1 << 20, no_alloc=True) as ctx:
+        a = ctx.new_tensor_2d(F32, 3, 4, name="a")  # ggml order = reversed numpy shape
+        b = ctx.new_tensor_2d(F32, 3, 2, name="b")
+        c = b.mul_mat(a)                             # numpy a @ b == b.mul_mat(a)
+        be.alloc_ctx_tensors(ctx)
+        be.tensor_set(a, np.random.rand(4, 3).astype(np.float32))
+        be.tensor_set(b, np.random.rand(2, 3).astype(np.float32))
+        graph = ctx.new_graph().build_forward_expand(c)
+        with GAllocr.from_backend(be) as alloc:
+            alloc.alloc_graph(graph)
+            be.compute(graph); be.synchronize()
+        out = np.empty(tuple(reversed(c.ne)), dtype=np.float32)
+        be.tensor_get(c, out)
+        print(out)
 """
 
 from __future__ import annotations

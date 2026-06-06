@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ._ffi import _ggml, _utils, nonnull
+from ._ffi import _ggml, nonnull
 from .types import DType
 from .tensor import Tensor
 from .graph import Graph
@@ -14,10 +14,10 @@ class Context:
     """Owns a ``ggml_context``: the arena that holds tensor metadata (and,
     when ``no_alloc=False``, tensor data).
 
-    Memory can be specified directly via ``mem_size`` (bytes) or estimated from
-    ``n_tensors`` / ``n_graphs`` (metadata overhead only). When
-    ``no_alloc=False`` the context also stores tensor *data*, so its size cannot
-    be guessed from tensor counts alone -- an explicit ``mem_size`` is required.
+    ``mem_size`` (bytes) is the size of that arena, passed straight to
+    ``ggml_init_params``. Size it for the tensor metadata and graphs you will
+    create (use ``ggml_tensor_overhead()`` / ``ggml_graph_overhead()`` from the
+    bindings), plus the tensor data itself when ``no_alloc=False``.
 
     A :class:`Context` must outlive every :class:`Tensor` / :class:`Graph` it
     produces, because ``ggml_free`` releases all of their metadata at once.
@@ -26,26 +26,11 @@ class Context:
 
     def __init__(
         self,
+        mem_size: int,
         *,
-        mem_size: Optional[int] = None,
-        n_tensors: Optional[int] = None,
-        n_graphs: int = 0,
         no_alloc: bool = True,
         mem_buffer=None,
     ):
-        if mem_size is None:
-            if not no_alloc:
-                raise ValueError(
-                    "no_alloc=False stores tensor data in the context; "
-                    "an explicit mem_size is required"
-                )
-            if n_tensors is None:
-                raise ValueError("provide either mem_size or n_tensors")
-            mem_size = (
-                _ggml.ggml_tensor_overhead() * (n_tensors + 8)
-                + _ggml.ggml_graph_overhead() * n_graphs
-            )
-
         params = _ggml.ggml_init_params(mem_size, mem_buffer, no_alloc)
         self.ptr = nonnull(_ggml.ggml_init(params), "ggml_init")
         self.no_alloc = no_alloc
@@ -69,44 +54,27 @@ class Context:
         return self
 
     # -- tensor factories ---------------------------------------------------
+    #
+    # Dimensions are in **ggml order** ``(ne0, ne1, ...)`` -- the reverse of
+    # numpy's row-major order. Each factory maps 1:1 to ``ggml_new_tensor_Nd``.
 
-    def new_tensor(self, dtype: "DType", *shape: int, name: Optional[str] = None) -> Tensor:
-        """Create a new tensor with dimensions in **ggml order** ``(ne0, ne1, ...)``.
-
-        Note this is the reverse of numpy's row-major order. See
-        :attr:`Tensor.ne` vs :attr:`Tensor.shape`.
-        """
-        t = int(dtype)
-        n = len(shape)
-        if n == 1:
-            ptr = _ggml.ggml_new_tensor_1d(self.ptr, t, shape[0])
-        elif n == 2:
-            ptr = _ggml.ggml_new_tensor_2d(self.ptr, t, shape[0], shape[1])
-        elif n == 3:
-            ptr = _ggml.ggml_new_tensor_3d(self.ptr, t, shape[0], shape[1], shape[2])
-        elif n == 4:
-            ptr = _ggml.ggml_new_tensor_4d(self.ptr, t, shape[0], shape[1], shape[2], shape[3])
-        else:
-            raise ValueError("ggml tensors support 1 to 4 dimensions")
+    def _new_tensor(self, ptr, name: Optional[str]) -> Tensor:
         tensor = Tensor(self, nonnull(ptr, "ggml_new_tensor"))
         if name is not None:
             tensor.name = name
         return tensor
 
-    def tensor_from_numpy(self, x, name: Optional[str] = None) -> Tensor:
-        """Create a tensor with data copied from a numpy array.
+    def new_tensor_1d(self, dtype: "DType", ne0: int, *, name: Optional[str] = None) -> Tensor:
+        return self._new_tensor(_ggml.ggml_new_tensor_1d(self.ptr, int(dtype), ne0), name)
 
-        Only usable when ``no_alloc=False`` (the context must own the data).
-        Accepts numpy-order shape; ``ggml.utils.from_numpy`` reverses the
-        dimensions internally.
-        """
-        if self.no_alloc:
-            raise ValueError("tensor_from_numpy requires a context with no_alloc=False")
-        ptr = nonnull(_utils.from_numpy(x, self.ptr), "from_numpy")
-        tensor = Tensor(self, ptr)
-        if name is not None:
-            tensor.name = name
-        return tensor
+    def new_tensor_2d(self, dtype: "DType", ne0: int, ne1: int, *, name: Optional[str] = None) -> Tensor:
+        return self._new_tensor(_ggml.ggml_new_tensor_2d(self.ptr, int(dtype), ne0, ne1), name)
+
+    def new_tensor_3d(self, dtype: "DType", ne0: int, ne1: int, ne2: int, *, name: Optional[str] = None) -> Tensor:
+        return self._new_tensor(_ggml.ggml_new_tensor_3d(self.ptr, int(dtype), ne0, ne1, ne2), name)
+
+    def new_tensor_4d(self, dtype: "DType", ne0: int, ne1: int, ne2: int, ne3: int, *, name: Optional[str] = None) -> Tensor:
+        return self._new_tensor(_ggml.ggml_new_tensor_4d(self.ptr, int(dtype), ne0, ne1, ne2, ne3), name)
 
     # -- graph factory ------------------------------------------------------
 
