@@ -4,7 +4,7 @@ A :class:`GGUF` wraps the ``gguf_context`` returned by ``gguf_init_from_file``
 and exposes its readers ~1:1 as Python methods. It does *not* read tensor data
 itself -- ``data_offset`` / ``get_tensor_offset`` / ``get_tensor_name`` give the
 caller everything needed to seek into the file and upload weights via
-``Backend.tensor_set`` / ``ggml_backend_tensor_set``.
+``Tensor.set`` / ``ggml_backend_tensor_set``.
 """
 
 from __future__ import annotations

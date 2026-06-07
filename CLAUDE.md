@@ -42,10 +42,10 @@ Everything live lives under **`ggbond/ggml/`** — a thin OO wrapper whose class
 | `_ffi.py` | — | **The only module that imports the top-level `ggml` (ggml-python) package**, re-exported as `_ggml` / `_utils`. Also defines `GGMLError`, `check_status`, `nonnull`. All other modules import the bindings *from here*, never `import ggml` directly — this avoids the name clash between the site-packages `ggml` and the `ggbond.ggml` subpackage. |
 | `types.py` | `DType` | Reuses `ggml.utils.GGML_TYPE` directly (values never drift). Aliases `F32`, `F16`, `I32`, … and `dtype_from_numpy` / `dtype_to_numpy`. |
 | `context.py` | `Context` | `ggml_context`. Constructor takes `mem_size` (bytes, positional) + `no_alloc=True` / `mem_buffer`. Size it for tensor metadata + graphs (and tensor data when `no_alloc=False`); `examples/simple.py` uses `1 << 20`. Factories: `new_tensor_1d/2d/3d/4d(dtype, *ne, name=…)`, `new_graph()`. `from_ptr()` wraps an externally created context (e.g. the one `gguf_init_from_file` fills in). |
-| `tensor.py` | `Tensor` | A `(Context, ggml_tensor_p)` pair. Op methods return new `Tensor`s in the same context. Simple ops are table-generated from `_UNARY_OPS` / `_BINARY_OPS`; scalar/shape ops (`scale`, `norm`, `rms_norm`, `reshape_*`, `permute`, `view_*`) are explicit methods. **No numpy methods** — data transfer is done via the `Backend` (see below). |
+| `tensor.py` | `Tensor` | A `(Context, ggml_tensor_p)` pair. Op methods return new `Tensor`s in the same context. Simple ops are table-generated from `_UNARY_OPS` / `_BINARY_OPS`; scalar/shape ops (`scale`, `norm`, `rms_norm`, `reshape_*`, `permute`, `view_*`) are explicit methods. **This is where numpy lives**: `set(x)` uploads any array-like (incl. plain Python lists — runs `np.ascontiguousarray`) and `get(out)` downloads into a **pre-allocated numpy array** via `out.ctypes`. These wrap ggml's sync transfer `ggml_backend_tensor_set/get`, which are keyed on the tensor's own buffer and take **no backend handle** — hence they live on `Tensor`, not `Backend`. The tensor must already be allocated. |
 | `graph.py` | `Graph` | `ggml_cgraph`. Holds a strong ref to its backing `Context`; no independent `close()` (freed with the context). `build_forward_expand()`, `compute_with_ctx()` (CPU-only convenience for `no_alloc=False`), node iteration via struct fields. |
 | `gallocr.py` | `GAllocr` | `ggml_gallocr`. `from_backend(be)`, `reserve()`, `alloc_graph()`. |
-| `backend.py` | `Backend` | CPU/CUDA/Metal/HIP handle. Constructed by `kind` (`ggml_backend_{cpu,cuda,...}_init`) **or** via the device registry: `Backend.load_all()` then `Backend.init_best()` / `Backend.init_by_type(DEVICE_CPU\|DEVICE_GPU\|DEVICE_IGPU\|DEVICE_ACCEL)` (these `DEVICE_*` constants mirror ggml's `enum ggml_backend_dev_type` and are exported from `ggbond.ggml`). Tracks buffers it allocates and frees them on `close()`. `alloc_ctx_tensors()`, `tensor_set/get()`, `compute(graph)`, `synchronize()`. **This is where numpy lives**: `tensor_set` accepts any array-like (incl. plain Python lists — it runs `np.ascontiguousarray`); `tensor_get(tensor, out)` writes into a **pre-allocated numpy array** via `out.ctypes`, so reading results back requires numpy. |
+| `backend.py` | `Backend` | CPU/CUDA/Metal/HIP handle. Constructed by `kind` (`ggml_backend_{cpu,cuda,...}_init`) **or** via the device registry: `Backend.load_all()` then `Backend.init_best()` / `Backend.init_by_type(DEVICE_CPU\|DEVICE_GPU\|DEVICE_IGPU\|DEVICE_ACCEL)` (these `DEVICE_*` constants mirror ggml's `enum ggml_backend_dev_type` and are exported from `ggbond.ggml`). Tracks buffers it allocates and frees them on `close()`. `alloc_ctx_tensors()`, `compute(graph)`, `synchronize()`. Tensor data transfer is **not** here — the sync `ggml_backend_tensor_set/get` take no backend handle, so they live on `Tensor` (`Tensor.set` / `Tensor.get`). |
 | `scheduler.py` | `Scheduler` | `ggml_backend_sched`. Splits a graph across one or more backends and computes it — the multi-backend analog of `GAllocr` + `Backend.compute`. Ctor takes a sequence of `Backend`s (`from_backends(*backends)` factory), optional `bufts` (NULL ⇒ each backend's default buffer type), `graph_size`, `parallel`. `reserve()`, `alloc_graph()`, `graph_compute()` / `graph_compute_async()`, `synchronize()`, `reset()`, `get_n_splits/get_n_copies()`, `set/get_tensor_backend()`. Holds strong refs to its `Backend`s so they outlive it; `close()` frees only the `ggml_backend_sched` (the backends are owned by their own wrappers). |
 | `gguf.py` | `GGUF` | `gguf_context` (parsed GGUF header/metadata). `from_file(path)` parses via `gguf_init_from_file` and, by default, also wraps the metadata `ggml_context` it fills as `.context`. **Ownership is split**: `GGUF.close()` frees only the `gguf_context`; `.context` is an independently owned `Context` you must close yourself (and that must outlive any graph referencing its tensors). `GGUF` does *not* read tensor data — `data_offset` / `get_tensor_offset` / `get_tensor_name` give the caller what they need to seek into the file and upload weights. |
 
@@ -69,16 +69,15 @@ with Backend("cpu", n_threads=4) as be, \
     tc = ta.mul_mat(tb)                                        # build metadata graph
 
     be.alloc_ctx_tensors(ctx)                                  # allocate backend memory for ctx tensors
-    be.tensor_set(ta, a)                                       # upload (lists also accepted)
-    be.tensor_set(tb, b)
+    ta.set(a)                                                  # upload via the tensor (lists also accepted)
+    tb.set(b)
 
     graph = ctx.new_graph().build_forward_expand(tc)
     with GAllocr.from_backend(be) as alloc:
         alloc.alloc_graph(graph)                               # allocate working memory
         be.compute(graph); be.synchronize()
 
-    out = np.empty(tuple(reversed(tc.ne)), dtype=np.float32)   # tensor_get needs a numpy buffer
-    be.tensor_get(tc, out)
+    out = tc.get(np.empty(tuple(reversed(tc.ne)), dtype=np.float32))  # download into a numpy buffer
 ```
 
 ### Shape convention (frequent source of bugs)

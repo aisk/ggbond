@@ -8,10 +8,13 @@ lazy.
 
 from __future__ import annotations
 
+import ctypes
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from ._ffi import _ggml
-from .types import DType
+from .types import DType, dtype_to_numpy
 
 if TYPE_CHECKING:
     from .context import Context
@@ -141,6 +144,32 @@ class Tensor:
 
     def view_3d(self, ne0: int, ne1: int, ne2: int, nb1: int, nb2: int, offset: int = 0) -> "Tensor":
         return self._wrap(_ggml.ggml_view_3d(self._c, self.ptr, ne0, ne1, ne2, nb1, nb2, offset))
+
+    # -- data transfer ------------------------------------------------------
+    #
+    # ggml's sync transfer (``ggml_backend_tensor_set/get``) is keyed on the
+    # tensor's own buffer and takes no backend handle, so it lives here rather
+    # than on Backend. The tensor must already be allocated (e.g. via
+    # ``Backend.alloc_ctx_tensors``, ``GAllocr.alloc_graph``, or
+    # ``Scheduler.alloc_graph``). This is where numpy enters the wrapper.
+
+    def set(self, x) -> None:
+        """Upload ``x`` (any array-like, incl. a Python list) into this tensor.
+
+        Wraps ``ggml_backend_tensor_set``.
+        """
+        arr = np.ascontiguousarray(x, dtype=dtype_to_numpy(self.dtype))
+        ptr = arr.ctypes.data_as(ctypes.c_void_p)
+        _ggml.ggml_backend_tensor_set(self.ptr, ptr, 0, self.nbytes)
+
+    def get(self, out: "np.ndarray") -> "np.ndarray":
+        """Download this tensor into the pre-allocated, contiguous numpy array ``out``.
+
+        Wraps ``ggml_backend_tensor_get`` and returns ``out``.
+        """
+        ptr = out.ctypes.data_as(ctypes.c_void_p)
+        _ggml.ggml_backend_tensor_get(self.ptr, ptr, 0, self.nbytes)
+        return out
 
     def __repr__(self) -> str:
         return f"<ggml.Tensor name={self.name!r} ne={self.ne} dtype={self.dtype.name}>"

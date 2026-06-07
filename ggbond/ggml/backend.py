@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import ctypes
 from typing import TYPE_CHECKING, Optional
 
-import numpy as np
-
 from ._ffi import _ggml, GGMLError, check_status, nonnull
-from .types import dtype_to_numpy
 
 if TYPE_CHECKING:
     from .context import Context
     from .graph import Graph
-    from .tensor import Tensor
 
 
 def _init_backend(kind: str, device: int):
@@ -114,19 +109,6 @@ class Backend:
         )
         self._buffers.append(buf)
         return buf
-
-    # -- data transfer ------------------------------------------------------
-
-    def tensor_set(self, tensor: "Tensor", x) -> None:
-        arr = np.ascontiguousarray(x, dtype=dtype_to_numpy(tensor.dtype))
-        ptr = arr.ctypes.data_as(ctypes.c_void_p)
-        _ggml.ggml_backend_tensor_set(tensor.ptr, ptr, 0, tensor.nbytes)
-
-    def tensor_get(self, tensor: "Tensor", out: np.ndarray) -> np.ndarray:
-        """Copy ``tensor`` into the pre-allocated, contiguous numpy array ``out``."""
-        ptr = out.ctypes.data_as(ctypes.c_void_p)
-        _ggml.ggml_backend_tensor_get(tensor.ptr, ptr, 0, tensor.nbytes)
-        return out
 
     # -- compute ------------------------------------------------------------
 

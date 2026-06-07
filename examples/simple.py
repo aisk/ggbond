@@ -28,7 +28,6 @@ def main():
     # device plus an explicit CPU backend.
     Backend.load_all()
     backends = [Backend.init_best(), Backend.init_by_type(DEVICE_CPU, n_threads=4)]
-    be = backends[0]
 
     try:
         with Context(mem_size=1 << 20, no_alloc=True) as ctx, \
@@ -44,14 +43,13 @@ def main():
             # The scheduler allocates the graph's tensors; upload inputs after.
             sched.reset()
             sched.alloc_graph(graph)
-            be.tensor_set(ta, a)
-            be.tensor_set(tb, b)
+            ta.set(a)
+            tb.set(b)
 
             sched.graph_compute(graph)
             sched.synchronize()
 
-            result = np.empty(tuple(reversed(tc.ne)), dtype=np.float32)
-            be.tensor_get(tc, result)
+            result = tc.get(np.empty(tuple(reversed(tc.ne)), dtype=np.float32))
     finally:
         for backend in backends:
             backend.close()

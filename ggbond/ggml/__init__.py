@@ -15,14 +15,13 @@ Typical CPU flow::
         b = ctx.new_tensor_2d(F32, 3, 2, name="b")
         c = b.mul_mat(a)                             # numpy a @ b == b.mul_mat(a)
         be.alloc_ctx_tensors(ctx)
-        be.tensor_set(a, np.random.rand(4, 3).astype(np.float32))
-        be.tensor_set(b, np.random.rand(2, 3).astype(np.float32))
+        a.set(np.random.rand(4, 3).astype(np.float32))  # upload via the tensor
+        b.set(np.random.rand(2, 3).astype(np.float32))
         graph = ctx.new_graph().build_forward_expand(c)
         with GAllocr.from_backend(be) as alloc:
             alloc.alloc_graph(graph)
             be.compute(graph); be.synchronize()
-        out = np.empty(tuple(reversed(c.ne)), dtype=np.float32)
-        be.tensor_get(c, out)
+        out = c.get(np.empty(tuple(reversed(c.ne)), dtype=np.float32))
         print(out)
 """
 
