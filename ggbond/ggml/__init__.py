@@ -35,7 +35,7 @@ from .context import Context
 from .graph import Graph
 from .gallocr import GAllocr
 from .backend import Backend
-from .gguf import GGUF, load_gguf
+from .gguf import GGUF
 
 __all__ = [
     "GGMLError",
@@ -49,5 +49,4 @@ __all__ = [
     "GAllocr",
     "Backend",
     "GGUF",
-    "load_gguf",
 ]
