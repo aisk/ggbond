@@ -34,7 +34,7 @@ from .tensor import Tensor
 from .context import Context
 from .graph import Graph
 from .gallocr import GAllocr
-from .backend import Backend
+from .backend import Backend, DEVICE_CPU, DEVICE_GPU, DEVICE_IGPU, DEVICE_ACCEL
 from .scheduler import Scheduler
 from .gguf import GGUF
 
@@ -49,6 +49,7 @@ __all__ = [
     "Graph",
     "GAllocr",
     "Backend",
+    "DEVICE_CPU", "DEVICE_GPU", "DEVICE_IGPU", "DEVICE_ACCEL",
     "Scheduler",
     "GGUF",
 ]

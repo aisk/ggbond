@@ -30,6 +30,14 @@ def _init_backend(kind: str, device: int):
     raise ValueError(f"unknown backend kind: {kind!r}")
 
 
+# Device types for :meth:`Backend.init_by_type` (mirror ggml's
+# ``enum ggml_backend_dev_type`` -- values never drift).
+DEVICE_CPU = _ggml.GGML_BACKEND_DEVICE_TYPE_CPU
+DEVICE_GPU = _ggml.GGML_BACKEND_DEVICE_TYPE_GPU
+DEVICE_IGPU = _ggml.GGML_BACKEND_DEVICE_TYPE_IGPU
+DEVICE_ACCEL = _ggml.GGML_BACKEND_DEVICE_TYPE_ACCEL
+
+
 class Backend:
     """A ggml backend handle plus the buffers it allocates.
 
@@ -39,12 +47,48 @@ class Backend:
 
     def __init__(self, kind: str = "cpu", *, device: int = 0, n_threads: Optional[int] = None):
         kind = kind.lower()
-        self.ptr = nonnull(_init_backend(kind, device), f"{kind} backend init")
+        ptr = nonnull(_init_backend(kind, device), f"{kind} backend init")
+        self._adopt(ptr, kind, n_threads)
+
+    def _adopt(self, ptr, kind: str, n_threads: Optional[int]) -> None:
+        """Shared setup for an already-created ``ggml_backend_t`` handle."""
+        self.ptr = ptr
         self.kind = kind
         self._buffers = []
         self._closed = False
         if n_threads is not None and self.is_cpu:
             self.set_n_threads(n_threads)
+
+    @staticmethod
+    def load_all() -> None:
+        """Load every available backend library (``ggml_backend_load_all``).
+
+        Call once before :meth:`init_best` / :meth:`init_by_type` so dynamically
+        loaded backends (CUDA, Metal, ...) get registered.
+        """
+        _ggml.ggml_backend_load_all()
+
+    @classmethod
+    def init_best(cls, *, n_threads: Optional[int] = None) -> "Backend":
+        """Initialize the best available device (``ggml_backend_init_best``)."""
+        be = cls.__new__(cls)
+        ptr = nonnull(_ggml.ggml_backend_init_best(), "ggml_backend_init_best")
+        be._adopt(ptr, "best", n_threads)
+        return be
+
+    @classmethod
+    def init_by_type(cls, dev_type: int, *, params: Optional[bytes] = None,
+                     n_threads: Optional[int] = None) -> "Backend":
+        """Initialize the first device of ``dev_type`` (``ggml_backend_init_by_type``).
+
+        ``dev_type`` is one of :data:`DEVICE_CPU`, :data:`DEVICE_GPU`,
+        :data:`DEVICE_IGPU`, :data:`DEVICE_ACCEL`.
+        """
+        be = cls.__new__(cls)
+        ptr = nonnull(_ggml.ggml_backend_init_by_type(dev_type, params),
+                      "ggml_backend_init_by_type")
+        be._adopt(ptr, f"type:{int(dev_type)}", n_threads)
+        return be
 
     # -- queries ------------------------------------------------------------
 
