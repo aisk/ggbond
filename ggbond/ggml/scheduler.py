@@ -1,0 +1,125 @@
+"""Thin OO wrapper around ``ggml_backend_sched`` (multi-backend scheduler)."""
+
+from __future__ import annotations
+
+import ctypes
+from typing import TYPE_CHECKING, Optional, Sequence
+
+from ._ffi import _ggml, GGMLError, check_status, nonnull
+
+if TYPE_CHECKING:
+    from .backend import Backend
+    from .graph import Graph
+    from .tensor import Tensor
+
+
+def _ptr_array(items):
+    arr = (ctypes.c_void_p * len(items))()
+    for i, p in enumerate(items):
+        arr[i] = p
+    return arr
+
+
+class Scheduler:
+    """Splits a computation graph across one or more backends, allocates its
+    working memory, and computes it -- the multi-backend analog of
+    :class:`GAllocr` + :meth:`Backend.compute`.
+
+    The scheduler holds strong refs to its :class:`Backend` objects so they
+    outlive it (a scheduler must be freed before its backends). Closing the
+    scheduler frees only the ``ggml_backend_sched``; the backends are owned by
+    their own wrappers.
+    """
+
+    def __init__(
+        self,
+        backends: "Sequence[Backend]",
+        *,
+        bufts=None,
+        graph_size: Optional[int] = None,
+        parallel: bool = False,
+    ):
+        backends = list(backends)
+        if not backends:
+            raise ValueError("Scheduler needs at least one backend")
+        n = len(backends)
+        be_arr = _ptr_array([b.ptr for b in backends])
+        buft_arr = _ptr_array(list(bufts)) if bufts is not None else None
+        graph_size = graph_size or _ggml.GGML_DEFAULT_GRAPH_SIZE
+        self.ptr = nonnull(
+            _ggml.ggml_backend_sched_new(be_arr, buft_arr, n, graph_size, parallel),
+            "ggml_backend_sched_new",
+        )
+        self._backends = backends
+        self._closed = False
+
+    @classmethod
+    def from_backends(cls, *backends, **kw) -> "Scheduler":
+        if len(backends) == 1 and not hasattr(backends[0], "ptr"):
+            backends = tuple(backends[0])  # a single iterable was passed
+        return cls(backends, **kw)
+
+    # -- allocation ---------------------------------------------------------
+
+    def reserve(self, graph: "Graph") -> None:
+        """Pre-allocate backend buffers from a measure graph."""
+        if not _ggml.ggml_backend_sched_reserve(self.ptr, graph.ptr):
+            raise GGMLError("ggml_backend_sched_reserve failed")
+
+    def alloc_graph(self, graph: "Graph") -> None:
+        if not _ggml.ggml_backend_sched_alloc_graph(self.ptr, graph.ptr):
+            raise GGMLError("ggml_backend_sched_alloc_graph failed")
+
+    # -- compute ------------------------------------------------------------
+
+    def graph_compute(self, graph: "Graph") -> None:
+        status = _ggml.ggml_backend_sched_graph_compute(self.ptr, graph.ptr)
+        check_status(status, "ggml_backend_sched_graph_compute")
+
+    def graph_compute_async(self, graph: "Graph") -> None:
+        status = _ggml.ggml_backend_sched_graph_compute_async(self.ptr, graph.ptr)
+        check_status(status, "ggml_backend_sched_graph_compute_async")
+
+    def synchronize(self) -> None:
+        _ggml.ggml_backend_sched_synchronize(self.ptr)
+
+    def reset(self) -> None:
+        """Reset all assignments and allocators (call before changing backends)."""
+        _ggml.ggml_backend_sched_reset(self.ptr)
+
+    # -- queries ------------------------------------------------------------
+
+    def get_n_splits(self) -> int:
+        return _ggml.ggml_backend_sched_get_n_splits(self.ptr)
+
+    def get_n_copies(self) -> int:
+        return _ggml.ggml_backend_sched_get_n_copies(self.ptr)
+
+    # -- tensor backend assignment ------------------------------------------
+
+    def set_tensor_backend(self, tensor: "Tensor", backend: "Backend") -> None:
+        _ggml.ggml_backend_sched_set_tensor_backend(self.ptr, tensor.ptr, backend.ptr)
+
+    def get_tensor_backend(self, tensor: "Tensor"):
+        """Return the raw ``ggml_backend_t`` handle assigned to ``tensor`` (or ``None``)."""
+        return _ggml.ggml_backend_sched_get_tensor_backend(self.ptr, tensor.ptr)
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def close(self) -> None:
+        if not self._closed and self.ptr is not None:
+            _ggml.ggml_backend_sched_free(self.ptr)
+            self._closed = True
+            self.ptr = None
+
+    def __enter__(self) -> "Scheduler":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

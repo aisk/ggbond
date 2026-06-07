@@ -35,6 +35,7 @@ from .context import Context
 from .graph import Graph
 from .gallocr import GAllocr
 from .backend import Backend
+from .scheduler import Scheduler
 from .gguf import GGUF
 
 __all__ = [
@@ -48,5 +49,6 @@ __all__ = [
     "Graph",
     "GAllocr",
     "Backend",
+    "Scheduler",
     "GGUF",
 ]
