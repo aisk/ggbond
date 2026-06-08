@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from ._ffi import GGMLError
 from .types import DType, dtype_from_numpy, dtype_to_numpy, F32, F16, I8, I16, I32, I64, F64, BF16
-from .tensor import Tensor
+from .tensor import Tensor, POOL_MAX, POOL_AVG
 from .context import Context
 from .graph import Graph
 from .gallocr import GAllocr
@@ -44,6 +44,7 @@ __all__ = [
     "dtype_to_numpy",
     "F32", "F16", "I8", "I16", "I32", "I64", "F64", "BF16",
     "Tensor",
+    "POOL_MAX", "POOL_AVG",
     "Context",
     "Graph",
     "GAllocr",

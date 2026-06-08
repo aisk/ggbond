@@ -10,12 +10,7 @@ GGBond is an object-oriented Python wrapper over GGML (Georgi Gerganov's Machine
 - **Build backend**: `hatchling` (pure-Python wheel, no compilation step)
 - **Dependencies**: `ggml-python>=0.0.38` (provides the `ggml` ctypes module and `ggml.utils`) and `numpy` (the data-transfer API is numpy-based).
 
-> ⚠️ **Stale tree — read this first.** A past refactor (`♻️ Reimplement OO ggml wrapper on top of ggml-python`) replaced the previous pybind11/CMake design but left its files in place. The following are **stale and broken**:
-> - **Top-level modules** `ggbond/session.py`, `tensor.py`, `backend.py`, `context.py`, `graph.py`, `gguf.py` are leftovers from the old `Session`/`Tensor` design. They reference a removed C-mapping API and **fail to import** (verify with `python -c "import ggbond.session"`). There is no `Session` class anymore. The *live* code is the same-named files under `ggbond/ggml/`.
-> - **`README.md`** still describes the old "pybind11 / CMake / three-API" design, `CMAKE_ARGS="-DGGML_CUDA=ON"` build flags, and a `ggbond.Session` API — all **out of date**.
-> - **Examples** `gpt2.py`, `magika.py`, `clip.py`, `tensor_demo.py` use the old `Session` API and **do not run**. Only `examples/simple.py` uses the current API (it is the de-facto smoke test).
->
-> When asked to "fix" or "continue" work here, the likely intent is to delete the stale modules/examples or port them onto the `ggbond.ggml` OO API. Confirm before assuming.
+All live code lives under **`ggbond/ggml/`**. Some top-level `ggbond/*.py` modules and most `examples/*.py` are leftovers from an earlier design and do not run — only `examples/simple.py` uses the current API.
 
 ## Development Commands
 
@@ -31,7 +26,7 @@ uv pip install -e .          # or: pip install -e .
 There is no test suite, linter config, or CI. `examples/simple.py` is the only runnable example and the de-facto smoke test.
 
 ### Backend availability
-Backend init dispatches in `ggbond/ggml/backend.py` (`_init_backend`). Whether `cuda`/`metal`/`hip` actually work depends on **how the installed `ggml-python` wheel was built** — this repo no longer builds GGML, so the old `CMAKE_ARGS` instructions in the README no longer apply. `cpu` is always available. HIP is guarded with a `hasattr` check and raises a clear error if absent.
+Backend init dispatches in `ggbond/ggml/backend.py` (`_init_backend`). Whether `cuda`/`metal`/`hip` actually work depends on **how the installed `ggml-python` wheel was built** (this repo does not build GGML). `cpu` is always available. HIP is guarded with a `hasattr` check and raises a clear error if absent.
 
 ## Architecture
 
@@ -45,8 +40,8 @@ Everything live lives under **`ggbond/ggml/`** — a thin OO wrapper whose class
 | `tensor.py` | `Tensor` | A `(Context, ggml_tensor_p)` pair. Op methods return new `Tensor`s in the same context. Simple ops are table-generated from `_UNARY_OPS` / `_BINARY_OPS`; scalar/shape ops (`scale`, `norm`, `rms_norm`, `reshape_*`, `permute`, `view_*`) are explicit methods. **This is where numpy lives**: `set(x)` uploads any array-like (incl. plain Python lists — runs `np.ascontiguousarray`) and `get(out)` downloads into a **pre-allocated numpy array** via `out.ctypes`. These wrap ggml's sync transfer `ggml_backend_tensor_set/get`, which are keyed on the tensor's own buffer and take **no backend handle** — hence they live on `Tensor`, not `Backend`. The tensor must already be allocated. |
 | `graph.py` | `Graph` | `ggml_cgraph`. Holds a strong ref to its backing `Context`; no independent `close()` (freed with the context). `build_forward_expand()`, `compute_with_ctx()` (CPU-only convenience for `no_alloc=False`), node iteration via struct fields. |
 | `gallocr.py` | `GAllocr` | `ggml_gallocr`. `from_backend(be)`, `reserve()`, `alloc_graph()`. |
-| `backend.py` | `Backend` | CPU/CUDA/Metal/HIP handle. Constructed by `kind` (`ggml_backend_{cpu,cuda,...}_init`) **or** via the device registry: `Backend.load_all()` then `Backend.init_best()` / `Backend.init_by_type(DEVICE_CPU\|DEVICE_GPU\|DEVICE_IGPU\|DEVICE_ACCEL)` (these `DEVICE_*` constants mirror ggml's `enum ggml_backend_dev_type` and are exported from `ggbond.ggml`). Tracks buffers it allocates and frees them on `close()`. `alloc_ctx_tensors()`, `compute(graph)`, `synchronize()`. Tensor data transfer is **not** here — the sync `ggml_backend_tensor_set/get` take no backend handle, so they live on `Tensor` (`Tensor.set` / `Tensor.get`). |
-| `scheduler.py` | `Scheduler` | `ggml_backend_sched`. Splits a graph across one or more backends and computes it — the multi-backend analog of `GAllocr` + `Backend.compute`. Ctor takes a sequence of `Backend`s (`from_backends(*backends)` factory), optional `bufts` (NULL ⇒ each backend's default buffer type), `graph_size`, `parallel`. `reserve()`, `alloc_graph()`, `graph_compute()` / `graph_compute_async()`, `synchronize()`, `reset()`, `get_n_splits/get_n_copies()`, `set/get_tensor_backend()`. Holds strong refs to its `Backend`s so they outlive it; `close()` frees only the `ggml_backend_sched` (the backends are owned by their own wrappers). |
+| `backend.py` | `Backend` | CPU/CUDA/Metal/HIP handle. Constructed by `kind` (`ggml_backend_{cpu,cuda,...}_init`) **or** via the device registry: `Backend.load_all()` then `Backend.init_best()` / `Backend.init_by_type(DEVICE_CPU\|DEVICE_GPU\|DEVICE_IGPU\|DEVICE_ACCEL)` (the `DEVICE_*` constants mirror ggml's `enum ggml_backend_dev_type`, exported from `ggbond.ggml`). Tracks buffers it allocates and frees them on `close()`. Tensor data transfer is **not** here (it lives on `Tensor`, see above). |
+| `scheduler.py` | `Scheduler` | `ggml_backend_sched`. Splits a graph across one or more backends and computes it — the multi-backend analog of `GAllocr` + `Backend.compute`. `from_backends(*backends)` factory. Holds strong refs to its `Backend`s so they outlive it; `close()` frees only the `ggml_backend_sched` (the backends are owned by their own wrappers). |
 | `gguf.py` | `GGUF` | `gguf_context` (parsed GGUF header/metadata). `from_file(path)` parses via `gguf_init_from_file` and, by default, also wraps the metadata `ggml_context` it fills as `.context`. **Ownership is split**: `GGUF.close()` frees only the `gguf_context`; `.context` is an independently owned `Context` you must close yourself (and that must outlive any graph referencing its tensors). `GGUF` does *not* read tensor data — `data_offset` / `get_tensor_offset` / `get_tensor_name` give the caller what they need to seek into the file and upload weights. |
 
 `ggbond/__init__.py` re-exports the subpackage as `ggbond.ggml` plus `Context, Tensor, Backend, Graph, GAllocr, DType` (note: `GGUF` is exported from `ggbond.ggml`, not the top-level `ggbond`).

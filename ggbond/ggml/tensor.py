@@ -9,7 +9,7 @@ lazy.
 from __future__ import annotations
 
 import ctypes
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
@@ -18,6 +18,10 @@ from .types import DType, dtype_to_numpy
 
 if TYPE_CHECKING:
     from .context import Context
+
+# Pooling ops for :meth:`Tensor.pool_1d` (mirror ggml's ``enum ggml_op_pool``).
+POOL_MAX = _ggml.GGML_OP_POOL_MAX
+POOL_AVG = _ggml.GGML_OP_POOL_AVG
 
 # Simple ops generated onto the class: name -> ggml function name.
 _UNARY_OPS = {
@@ -118,6 +122,26 @@ class Tensor:
     def rms_norm(self, eps: float = 1e-5) -> "Tensor":
         """RMS normalization with epsilon ``eps``."""
         return self._wrap(_ggml.ggml_rms_norm(self._c, self.ptr, float(eps)))
+
+    # -- pooling ------------------------------------------------------------
+
+    def pool_1d(self, op: int, k0: int, s0: Optional[int] = None, p0: int = 0) -> "Tensor":
+        """1D pooling: kernel ``k0``, stride ``s0`` (defaults to ``k0``), padding ``p0``.
+
+        ``op`` is a ggml pooling op (:data:`POOL_MAX` / :data:`POOL_AVG`).
+        Wraps ``ggml_pool_1d``.
+        """
+        if s0 is None:
+            s0 = k0
+        return self._wrap(_ggml.ggml_pool_1d(self._c, self.ptr, int(op), k0, s0, p0))
+
+    def max_pool_1d(self, k0: int, s0: Optional[int] = None, p0: int = 0) -> "Tensor":
+        """1D max pooling (``ggml_pool_1d`` with ``GGML_OP_POOL_MAX``)."""
+        return self.pool_1d(_ggml.GGML_OP_POOL_MAX, k0, s0, p0)
+
+    def avg_pool_1d(self, k0: int, s0: Optional[int] = None, p0: int = 0) -> "Tensor":
+        """1D average pooling (``ggml_pool_1d`` with ``GGML_OP_POOL_AVG``)."""
+        return self.pool_1d(_ggml.GGML_OP_POOL_AVG, k0, s0, p0)
 
     # -- shape ops ----------------------------------------------------------
 
