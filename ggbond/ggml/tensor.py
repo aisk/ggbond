@@ -180,17 +180,31 @@ class Tensor:
     def set(self, x) -> None:
         """Upload ``x`` (any array-like, incl. a Python list) into this tensor.
 
-        Wraps ``ggml_backend_tensor_set``.
+        ``x`` is coerced to this tensor's dtype and made contiguous; its total
+        byte size must then match the tensor's. Wraps ``ggml_backend_tensor_set``.
         """
         arr = np.ascontiguousarray(x, dtype=dtype_to_numpy(self.dtype))
+        if arr.nbytes != self.nbytes:
+            raise ValueError(
+                f"set: source has {arr.nbytes} bytes but tensor needs "
+                f"{self.nbytes} (ne={self.ne}, dtype={self.dtype.name})"
+            )
         ptr = arr.ctypes.data_as(ctypes.c_void_p)
         _ggml.ggml_backend_tensor_set(self.ptr, ptr, 0, self.nbytes)
 
     def get(self, out: "np.ndarray") -> "np.ndarray":
         """Download this tensor into the pre-allocated, contiguous numpy array ``out``.
 
-        Wraps ``ggml_backend_tensor_get`` and returns ``out``.
+        ``out`` must be contiguous and exactly the tensor's byte size. Wraps
+        ``ggml_backend_tensor_get`` and returns ``out``.
         """
+        if not out.flags["C_CONTIGUOUS"]:
+            raise ValueError("get: out must be a C-contiguous array")
+        if out.nbytes != self.nbytes:
+            raise ValueError(
+                f"get: out has {out.nbytes} bytes but tensor holds "
+                f"{self.nbytes} (ne={self.ne}, dtype={self.dtype.name})"
+            )
         ptr = out.ctypes.data_as(ctypes.c_void_p)
         _ggml.ggml_backend_tensor_get(self.ptr, ptr, 0, self.nbytes)
         return out
