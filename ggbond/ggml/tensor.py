@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from ._ffi import _ggml
+import ggml as _ggml
+
 from .types import DType, dtype_to_numpy
 
 if TYPE_CHECKING:

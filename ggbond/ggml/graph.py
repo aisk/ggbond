@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ._ffi import _ggml, check_status, nonnull
+import ggml as _ggml
+
+from .errors import check_status, nonnull
 from .tensor import Tensor
 
 if TYPE_CHECKING:

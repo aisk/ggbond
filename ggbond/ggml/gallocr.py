@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ._ffi import _ggml, GGMLError, nonnull
+import ggml as _ggml
+
+from .errors import GGMLError, nonnull
 
 if TYPE_CHECKING:
     from .backend import Backend

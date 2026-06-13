@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ._ffi import _ggml, GGMLError, check_status, nonnull
+import ggml as _ggml
+
+from .errors import GGMLError, check_status, nonnull
 
 if TYPE_CHECKING:
     from .context import Context

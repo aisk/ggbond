@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ._ffi import _ggml, nonnull
+import ggml as _ggml
+
+from .errors import nonnull
 from .types import DType
 from .tensor import Tensor
 from .graph import Graph

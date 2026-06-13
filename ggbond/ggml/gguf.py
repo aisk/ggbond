@@ -12,7 +12,9 @@ from __future__ import annotations
 import ctypes
 from typing import Optional
 
-from ._ffi import _ggml, nonnull
+import ggml as _ggml
+
+from .errors import nonnull
 from .context import Context
 from .types import DType
 

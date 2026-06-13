@@ -1,20 +1,16 @@
-"""Isolation layer for the underlying ggml-python bindings.
+"""Error and null-check helpers shared across the wrapper.
 
-This is the *only* module that imports the top-level ``ggml`` (ggml-python)
-package. Every other module in :mod:`ggbond.ggml` imports the bindings from
-here as ``_ggml`` / ``_utils``. Keeping the import in one place avoids confusion
-with the subpackage name ``ggbond.ggml`` and makes it easy to swap the backing
-bindings later.
+Modules import the backing bindings directly as ``import ggml as _ggml`` (and
+``from ggml import utils as _utils``); the alias keeps the external package
+visually distinct from this ``ggbond.ggml`` subpackage. This module only holds
+the small helpers built on top of those bindings.
 """
 
 from __future__ import annotations
 
-# Absolute import: resolves to the site-packages top-level ggml-python package,
-# never to this subpackage (``ggbond.ggml``).
 import ggml as _ggml
-from ggml import utils as _utils
 
-__all__ = ["_ggml", "_utils", "GGMLError", "check_status", "nonnull"]
+__all__ = ["GGMLError", "check_status", "nonnull"]
 
 
 class GGMLError(RuntimeError):

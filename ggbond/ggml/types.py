@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ._ffi import _utils
+from ggml import utils as _utils
 
 # The canonical ggml type enum (F32 = 0, F16 = 1, I32 = 26, ...).
 DType = _utils.GGML_TYPE
