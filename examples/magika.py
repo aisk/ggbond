@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-import ggbond
+from ggbond.ggml import Backend, Context, GAllocr, GGUF, Tensor, F32
 
 
 MAGIKA_LABELS = [
@@ -62,8 +62,24 @@ class Magika:
     INP_BYTES = BEG_SIZE + MID_SIZE + END_SIZE
 
     def __init__(self, model_path: str, *, backend: str = "cpu"):
-        self._session = ggbond.Session(backend)
-        self._gguf = self._session.load_gguf(model_path)
+        self._backend = Backend(backend, n_threads=os.cpu_count() or 4)
+        # GGUF holds the parsed header; its .context holds the weight metadata.
+        # GGUF doesn't read tensor data -- allocate backend buffers, then upload
+        # each tensor's bytes straight from the file (standard ggml pattern).
+        self._gguf = GGUF.from_file(model_path, no_alloc=True)
+        self._backend.alloc_ctx_tensors(self._gguf.context)
+        with open(model_path, "rb") as f:
+            for i in range(self._gguf.n_tensors):
+                name = self._gguf.get_tensor_name(i)
+                t = self._gguf.context.get_tensor(name)
+                f.seek(self._gguf.data_offset + self._gguf.get_tensor_offset(i))
+                t.set_raw(f.read(t.nbytes))
+        self._weights = {
+            self._gguf.get_tensor_name(i): self._gguf.context.get_tensor(
+                self._gguf.get_tensor_name(i)
+            )
+            for i in range(self._gguf.n_tensors)
+        }
 
     def predict(self, files: list[str], *, top_k: int = 5) -> list[list[Prediction]]:
         """Predict file types for a list of files.
@@ -72,34 +88,51 @@ class Magika:
         """
         n_files = len(files)
         input_data = np.concatenate([self._preprocess_file(f) for f in files])
-        inp = self._session.tensor(input_data.reshape(n_files, self.INP_BYTES, 257))
-        w = self._gguf.weights
 
-        # dense
-        cur = (inp @ w["dense/kernel:0"] + w["dense/bias:0"]).gelu()
+        # Weights live in self._gguf.context (already allocated). Inputs and
+        # intermediates live in this compute context; GAllocr allocates them.
+        with Context(mem_size=1 << 20, no_alloc=True) as ctx:
+            # Rebind weights to this context so op-result nodes land here, not in
+            # the GGUF metadata context (which is sized only for the weights). The
+            # ggml_tensor pointers are shared; a graph may span both contexts.
+            w = {name: Tensor(ctx, t.ptr) for name, t in self._weights.items()}
 
-        # reshape + transpose
-        cur = cur.reshape(512, 384, n_files).transpose().cont()
+            inp = ctx.new_tensor_3d(F32, 257, self.INP_BYTES, n_files, name="input").set_input()
 
-        # layer normalization
-        cur = cur.norm(eps=self.F_NORM_EPS) * w["layer_normalization/gamma:0"] + w["layer_normalization/beta:0"]
+            # dense
+            cur = w["dense/kernel:0"].mul_mat(inp).add(w["dense/bias:0"]).gelu()
 
-        # dense_1
-        cur = (cur.transpose().cont() @ w["dense_1/kernel:0"] + w["dense_1/bias:0"]).gelu()
+            # reshape + transpose
+            cur = cur.reshape_3d(512, 384, n_files).transpose().cont()
 
-        # dense_2
-        cur = (cur @ w["dense_2/kernel:0"] + w["dense_2/bias:0"]).gelu()
+            # layer normalization
+            cur = cur.norm(eps=self.F_NORM_EPS).mul(w["layer_normalization/gamma:0"]).add(w["layer_normalization/beta:0"])
 
-        # global_max_pooling1d
-        cur = cur.transpose().cont().max_pool_1d(384, 384).reshape(256, n_files)
+            # dense_1
+            cur = w["dense_1/kernel:0"].mul_mat(cur.transpose().cont()).add(w["dense_1/bias:0"]).gelu()
 
-        # layer normalization 1
-        cur = cur.norm(eps=self.F_NORM_EPS) * w["layer_normalization_1/gamma:0"] + w["layer_normalization_1/beta:0"]
+            # dense_2
+            cur = w["dense_2/kernel:0"].mul_mat(cur).add(w["dense_2/bias:0"]).gelu()
 
-        # target_label
-        cur = (cur @ w["target_label/kernel:0"] + w["target_label/bias:0"]).softmax()
+            # global_max_pooling1d
+            cur = cur.transpose().cont().max_pool_1d(384, 384).reshape_2d(256, n_files)
 
-        all_probs = cur.numpy().reshape(n_files, self.N_LABEL)
+            # layer normalization 1
+            cur = cur.norm(eps=self.F_NORM_EPS).mul(w["layer_normalization_1/gamma:0"]).add(w["layer_normalization_1/beta:0"])
+
+            # target_label
+            out = w["target_label/kernel:0"].mul_mat(cur).add(w["target_label/bias:0"]).soft_max()
+            out.set_output()
+
+            graph = ctx.new_graph().build_forward_expand(out)
+            with GAllocr.from_backend(self._backend) as alloc:
+                alloc.alloc_graph(graph)
+                inp.set(input_data.reshape(n_files, self.INP_BYTES, 257))
+                self._backend.compute(graph)
+                self._backend.synchronize()
+                all_probs = out.get(
+                    np.empty(tuple(reversed(out.ne)), dtype=np.float32)
+                ).reshape(n_files, self.N_LABEL)
 
         results = []
         for probs in all_probs:
@@ -110,7 +143,11 @@ class Magika:
         return results
 
     def close(self):
-        self._session.close()
+        # gguf.context (weights) must outlive any graph referencing it; both it
+        # and the gguf_context are owned separately from the backend.
+        self._gguf.context.close()
+        self._gguf.close()
+        self._backend.close()
 
     def __enter__(self):
         return self
@@ -139,7 +176,7 @@ class Magika:
             # middle (centered)
             mid_offset = max(0, (fsize - cls.MID_SIZE) // 2)
             mid = cls._read_segment(f, mid_offset, cls.MID_SIZE)
-            mid_start = cls.BEG_SIZE + (cls.MID_SIZE - len(mid)) // 2
+            mid_start = cls.BEG_SIZE + cls.MID_SIZE // 2 - len(mid) // 2
             buf[mid_start:mid_start + len(mid)] = mid
 
             # end (right-aligned)
