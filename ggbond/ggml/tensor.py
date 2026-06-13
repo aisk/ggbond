@@ -169,6 +169,28 @@ class Tensor:
     def view_3d(self, ne0: int, ne1: int, ne2: int, nb1: int, nb2: int, offset: int = 0) -> "Tensor":
         return self._wrap(_ggml.ggml_view_3d(self._c, self.ptr, ne0, ne1, ne2, nb1, nb2, offset))
 
+    # -- graph I/O flags ----------------------------------------------------
+
+    def set_input(self) -> "Tensor":
+        """Mark this tensor as a graph input (``ggml_set_input``).
+
+        Tells the allocator not to reuse this tensor's buffer for intermediate
+        results, so a value uploaded after ``alloc_graph`` survives the compute.
+        Required for inputs when using :class:`GAllocr` / :class:`Scheduler`.
+        Returns ``self`` so it can be chained.
+        """
+        _ggml.ggml_set_input(self.ptr)
+        return self
+
+    def set_output(self) -> "Tensor":
+        """Mark this tensor as a graph output (``ggml_set_output``).
+
+        Keeps the allocator from overwriting this tensor's buffer, so it can be
+        read back after compute. Returns ``self``.
+        """
+        _ggml.ggml_set_output(self.ptr)
+        return self
+
     # -- data transfer ------------------------------------------------------
     #
     # ggml's sync transfer (``ggml_backend_tensor_set/get``) is keyed on the
@@ -191,6 +213,24 @@ class Tensor:
             )
         ptr = arr.ctypes.data_as(ctypes.c_void_p)
         _ggml.ggml_backend_tensor_set(self.ptr, ptr, 0, self.nbytes)
+
+    def set_raw(self, data, offset: int = 0) -> None:
+        """Upload raw bytes into this tensor verbatim (no dtype coercion).
+
+        ``data`` is any bytes-like buffer (``bytes``, ``bytearray``,
+        ``memoryview``, ...) whose layout already matches the tensor's. Use this
+        for weights read straight from a file -- including quantized dtypes that
+        have no numpy equivalent. ``offset`` is the byte offset into the tensor.
+        Wraps ``ggml_backend_tensor_set``.
+        """
+        mv = memoryview(data).cast("B")
+        if offset + mv.nbytes > self.nbytes:
+            raise ValueError(
+                f"set_raw: {mv.nbytes} bytes at offset {offset} exceed tensor "
+                f"size {self.nbytes} (ne={self.ne}, dtype={self.dtype.name})"
+            )
+        ptr = (ctypes.c_char * mv.nbytes).from_buffer_copy(mv)
+        _ggml.ggml_backend_tensor_set(self.ptr, ptr, offset, mv.nbytes)
 
     def get(self, out: "np.ndarray") -> "np.ndarray":
         """Download this tensor into the pre-allocated, contiguous numpy array ``out``.
