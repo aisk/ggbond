@@ -13,20 +13,6 @@ if TYPE_CHECKING:
     from .graph import Graph
 
 
-def _init_backend(kind: str, device: int):
-    if kind == "cpu":
-        return _ggml.ggml_backend_cpu_init()
-    if kind == "cuda":
-        return _ggml.ggml_backend_cuda_init(device)
-    if kind == "metal":
-        return _ggml.ggml_backend_metal_init()
-    if kind in ("hip", "rocm"):
-        if not hasattr(_ggml, "ggml_backend_hip_init"):
-            raise GGMLError("HIP backend is not available in this ggml build")
-        return _ggml.ggml_backend_hip_init(device)
-    raise ValueError(f"unknown backend kind: {kind!r}")
-
-
 # Device types for :meth:`Backend.init_by_type` (mirror ggml's
 # ``enum ggml_backend_dev_type`` -- values never drift).
 DEVICE_CPU = _ggml.GGML_BACKEND_DEVICE_TYPE_CPU
@@ -42,19 +28,43 @@ class Backend:
     on :meth:`close` (before the backend itself).
     """
 
-    def __init__(self, kind: str = "cpu", *, device: int = 0, n_threads: Optional[int] = None):
-        kind = kind.lower()
-        ptr = nonnull(_init_backend(kind, device), f"{kind} backend init")
-        self._adopt(ptr, kind, n_threads)
+    def __init__(self, ptr, *, kind: str = "backend"):
+        """Adopt an already-created ``ggml_backend_t`` handle.
 
-    def _adopt(self, ptr, kind: str, n_threads: Optional[int]) -> None:
-        """Shared setup for an already-created ``ggml_backend_t`` handle."""
-        self.ptr = ptr
+        Most callers should use a device-specific factory
+        (:meth:`cpu_init`, :meth:`cuda_init`, :meth:`metal_init`,
+        :meth:`hip_init`) or :meth:`init_best` / :meth:`init_by_type` rather
+        than constructing from a raw pointer directly. ``kind`` is just a label
+        for :func:`repr`.
+        """
+        self.ptr = nonnull(ptr, f"{kind} backend")
         self.kind = kind
         self._buffers = []
         self._closed = False
-        if n_threads is not None and self.is_cpu:
-            self.set_n_threads(n_threads)
+
+    # -- device-specific factories (one per ``ggml_backend_*_init``) --------
+
+    @classmethod
+    def cpu_init(cls) -> "Backend":
+        """Initialize the CPU backend (``ggml_backend_cpu_init``)."""
+        return cls(_ggml.ggml_backend_cpu_init(), kind="cpu")
+
+    @classmethod
+    def cuda_init(cls, device: int = 0) -> "Backend":
+        """Initialize CUDA device ``device`` (``ggml_backend_cuda_init``)."""
+        return cls(_ggml.ggml_backend_cuda_init(device), kind="cuda")
+
+    @classmethod
+    def metal_init(cls) -> "Backend":
+        """Initialize the Metal backend (``ggml_backend_metal_init``)."""
+        return cls(_ggml.ggml_backend_metal_init(), kind="metal")
+
+    @classmethod
+    def hip_init(cls, device: int = 0) -> "Backend":
+        """Initialize HIP/ROCm device ``device`` (``ggml_backend_hip_init``)."""
+        if not hasattr(_ggml, "ggml_backend_hip_init"):
+            raise GGMLError("HIP backend is not available in this ggml build")
+        return cls(_ggml.ggml_backend_hip_init(device), kind="hip")
 
     @staticmethod
     def load_all() -> None:
@@ -66,26 +76,19 @@ class Backend:
         _ggml.ggml_backend_load_all()
 
     @classmethod
-    def init_best(cls, *, n_threads: Optional[int] = None) -> "Backend":
+    def init_best(cls) -> "Backend":
         """Initialize the best available device (``ggml_backend_init_best``)."""
-        be = cls.__new__(cls)
-        ptr = nonnull(_ggml.ggml_backend_init_best(), "ggml_backend_init_best")
-        be._adopt(ptr, "best", n_threads)
-        return be
+        return cls(_ggml.ggml_backend_init_best(), kind="best")
 
     @classmethod
-    def init_by_type(cls, dev_type: int, *, params: Optional[bytes] = None,
-                     n_threads: Optional[int] = None) -> "Backend":
+    def init_by_type(cls, dev_type: int, *, params: Optional[bytes] = None) -> "Backend":
         """Initialize the first device of ``dev_type`` (``ggml_backend_init_by_type``).
 
         ``dev_type`` is one of :data:`DEVICE_CPU`, :data:`DEVICE_GPU`,
         :data:`DEVICE_IGPU`, :data:`DEVICE_ACCEL`.
         """
-        be = cls.__new__(cls)
-        ptr = nonnull(_ggml.ggml_backend_init_by_type(dev_type, params),
-                      "ggml_backend_init_by_type")
-        be._adopt(ptr, f"type:{int(dev_type)}", n_threads)
-        return be
+        return cls(_ggml.ggml_backend_init_by_type(dev_type, params),
+                   kind=f"type:{int(dev_type)}")
 
     # -- queries ------------------------------------------------------------
 

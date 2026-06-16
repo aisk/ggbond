@@ -9,8 +9,9 @@ Typical CPU flow::
     import numpy as np
     from ggbond.ggml import Context, Backend, GAllocr, F32
 
-    with Backend("cpu", n_threads=4) as be, \\
+    with Backend.cpu_init() as be, \\
          Context(mem_size=1 << 20, no_alloc=True) as ctx:
+        be.set_n_threads(4)
         a = ctx.new_tensor_2d(F32, 3, 4, name="a")  # ggml order = reversed numpy shape
         b = ctx.new_tensor_2d(F32, 3, 2, name="b")
         c = b.mul_mat(a)                             # numpy a @ b == b.mul_mat(a)

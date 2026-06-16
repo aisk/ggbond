@@ -9,7 +9,7 @@ lazy.
 from __future__ import annotations
 
 import ctypes
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -116,33 +116,22 @@ class Tensor:
         """Element-wise multiply by a scalar ``s``."""
         return self._wrap(_ggml.ggml_scale(self._c, self.ptr, float(s)))
 
-    def norm(self, eps: float = 1e-5) -> "Tensor":
-        """Layer normalization with epsilon ``eps``."""
+    def norm(self, eps: float) -> "Tensor":
+        """Layer normalization with epsilon ``eps`` (``ggml_norm``)."""
         return self._wrap(_ggml.ggml_norm(self._c, self.ptr, float(eps)))
 
-    def rms_norm(self, eps: float = 1e-5) -> "Tensor":
-        """RMS normalization with epsilon ``eps``."""
+    def rms_norm(self, eps: float) -> "Tensor":
+        """RMS normalization with epsilon ``eps`` (``ggml_rms_norm``)."""
         return self._wrap(_ggml.ggml_rms_norm(self._c, self.ptr, float(eps)))
 
     # -- pooling ------------------------------------------------------------
 
-    def pool_1d(self, op: int, k0: int, s0: Optional[int] = None, p0: int = 0) -> "Tensor":
-        """1D pooling: kernel ``k0``, stride ``s0`` (defaults to ``k0``), padding ``p0``.
+    def pool_1d(self, op: int, k0: int, s0: int, p0: int) -> "Tensor":
+        """1D pooling: kernel ``k0``, stride ``s0``, padding ``p0`` (``ggml_pool_1d``).
 
         ``op`` is a ggml pooling op (:data:`POOL_MAX` / :data:`POOL_AVG`).
-        Wraps ``ggml_pool_1d``.
         """
-        if s0 is None:
-            s0 = k0
         return self._wrap(_ggml.ggml_pool_1d(self._c, self.ptr, int(op), k0, s0, p0))
-
-    def max_pool_1d(self, k0: int, s0: Optional[int] = None, p0: int = 0) -> "Tensor":
-        """1D max pooling (``ggml_pool_1d`` with ``GGML_OP_POOL_MAX``)."""
-        return self.pool_1d(_ggml.GGML_OP_POOL_MAX, k0, s0, p0)
-
-    def avg_pool_1d(self, k0: int, s0: Optional[int] = None, p0: int = 0) -> "Tensor":
-        """1D average pooling (``ggml_pool_1d`` with ``GGML_OP_POOL_AVG``)."""
-        return self.pool_1d(_ggml.GGML_OP_POOL_AVG, k0, s0, p0)
 
     # -- shape ops ----------------------------------------------------------
 

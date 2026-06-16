@@ -27,7 +27,9 @@ def main():
     # Like ggml's init_model: register all backends, then schedule over the best
     # device plus an explicit CPU backend.
     Backend.load_all()
-    backends = [Backend.init_best(), Backend.init_by_type(DEVICE_CPU, n_threads=4)]
+    cpu = Backend.init_by_type(DEVICE_CPU)
+    cpu.set_n_threads(4)
+    backends = [Backend.init_best(), cpu]
 
     try:
         with Context(mem_size=1 << 20, no_alloc=True) as ctx, \

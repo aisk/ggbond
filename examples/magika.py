@@ -1,7 +1,7 @@
 """Magika file type detector using ggbond Tensor API.
 
 Usage:
-    python examples/magika.py <model.gguf> <file1> [file2 ...] [--backend cpu|metal|hip]
+    python examples/magika.py <model.gguf> <file1> [file2 ...]
 """
 
 import argparse
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ggbond.ggml import Backend, Context, GAllocr, GGUF, Tensor, F32
+from ggbond.ggml import Backend, Context, GAllocr, GGUF, Tensor, F32, POOL_MAX
 
 
 MAGIKA_LABELS = [
@@ -61,8 +61,9 @@ class Magika:
     PADDING_TOKEN = 256
     INP_BYTES = BEG_SIZE + MID_SIZE + END_SIZE
 
-    def __init__(self, model_path: str, *, backend: str = "cpu"):
-        self._backend = Backend(backend, n_threads=os.cpu_count() or 4)
+    def __init__(self, model_path: str):
+        self._backend = Backend.cpu_init()
+        self._backend.set_n_threads(os.cpu_count() or 4)
         # GGUF holds the parsed header; its .context holds the weight metadata.
         # GGUF doesn't read tensor data -- allocate backend buffers, then upload
         # each tensor's bytes straight from the file (standard ggml pattern).
@@ -115,7 +116,7 @@ class Magika:
             cur = w["dense_2/kernel:0"].mul_mat(cur).add(w["dense_2/bias:0"]).gelu()
 
             # global_max_pooling1d
-            cur = cur.transpose().cont().max_pool_1d(384, 384).reshape_2d(256, n_files)
+            cur = cur.transpose().cont().pool_1d(POOL_MAX, 384, 384, 0).reshape_2d(256, n_files)
 
             # layer normalization 1
             cur = cur.norm(eps=self.F_NORM_EPS).mul(w["layer_normalization_1/gamma:0"]).add(w["layer_normalization_1/beta:0"])
@@ -209,8 +210,6 @@ def main():
     parser = argparse.ArgumentParser(description="Magika file type detector")
     parser.add_argument("model_path", help="Path to magika GGUF model")
     parser.add_argument("files", nargs="+", help="Files or directories to classify")
-    parser.add_argument("-b", "--backend", default="cpu", choices=["cpu", "metal", "hip"],
-                        help="Backend to use (default: cpu)")
     args = parser.parse_args()
 
     files = _expand_paths(args.files)
@@ -218,7 +217,7 @@ def main():
         print("No files to classify.")
         return
 
-    with Magika(args.model_path, backend=args.backend) as magika:
+    with Magika(args.model_path) as magika:
         results = magika.predict(files)
         for fpath, preds in zip(files, results):
             top_str = " ".join(str(p) for p in preds)
