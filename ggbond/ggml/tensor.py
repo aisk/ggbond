@@ -43,6 +43,7 @@ _BINARY_OPS = {
     "div": "ggml_div",
     "mul_mat": "ggml_mul_mat",
     "get_rows": "ggml_get_rows",
+    "cpy": "ggml_cpy",
 }
 
 
@@ -99,6 +100,11 @@ class Tensor:
         return _ggml.ggml_nbytes(self.ptr)
 
     @property
+    def element_size(self) -> int:
+        """Size in bytes of one element of this tensor's dtype (``ggml_element_size``)."""
+        return _ggml.ggml_element_size(self.ptr)
+
+    @property
     def op(self) -> int:
         return self.ptr.contents.op
 
@@ -124,6 +130,14 @@ class Tensor:
         """RMS normalization with epsilon ``eps`` (``ggml_rms_norm``)."""
         return self._wrap(_ggml.ggml_rms_norm(self._c, self.ptr, float(eps)))
 
+    def diag_mask_inf(self, n_past: int) -> "Tensor":
+        """Mask elements above the diagonal with ``-inf`` (``ggml_diag_mask_inf``).
+
+        ``n_past`` shifts the diagonal so the first ``n_past`` columns stay
+        unmasked -- this is the causal attention mask for cached keys/values.
+        """
+        return self._wrap(_ggml.ggml_diag_mask_inf(self._c, self.ptr, int(n_past)))
+
     # -- pooling ------------------------------------------------------------
 
     def pool_1d(self, op: int, k0: int, s0: int, p0: int) -> "Tensor":
@@ -146,6 +160,14 @@ class Tensor:
 
     def reshape_4d(self, ne0: int, ne1: int, ne2: int, ne3: int) -> "Tensor":
         return self._wrap(_ggml.ggml_reshape_4d(self._c, self.ptr, ne0, ne1, ne2, ne3))
+
+    def cont_2d(self, ne0: int, ne1: int) -> "Tensor":
+        """Make contiguous and reshape to 2D ``(ne0, ne1)`` (``ggml_cont_2d``)."""
+        return self._wrap(_ggml.ggml_cont_2d(self._c, self.ptr, ne0, ne1))
+
+    def cont_3d(self, ne0: int, ne1: int, ne2: int) -> "Tensor":
+        """Make contiguous and reshape to 3D ``(ne0, ne1, ne2)`` (``ggml_cont_3d``)."""
+        return self._wrap(_ggml.ggml_cont_3d(self._c, self.ptr, ne0, ne1, ne2))
 
     def permute(self, axis0: int, axis1: int, axis2: int, axis3: int) -> "Tensor":
         return self._wrap(_ggml.ggml_permute(self._c, self.ptr, axis0, axis1, axis2, axis3))
