@@ -21,6 +21,7 @@ Get a model with ggml's gpt-2 ``convert-ckpt-to-ggml.py`` / ``download-model.sh`
 """
 
 import argparse
+import codecs
 import math
 import random
 import re
@@ -39,30 +40,31 @@ GPT2_MAX_NODES = 4096
 # Tokenizer + sampling (model-format independent; ported from common.cpp)
 # ============================================================================
 
-def gpt_tokenize(token_to_id: dict[str, int], text: str) -> list[int]:
-    """Greedy longest-match BPE tokenizer matching the C++ ``gpt_tokenize``."""
+def gpt_tokenize(token_to_id: dict[bytes, int], text: str) -> list[int]:
+    """Greedy longest-match BPE tokenizer matching the C++ ``gpt_tokenize``.
+
+    Splits the text into GPT-2-style pieces (each keeps its leading space), then
+    greedily matches the longest known prefix against the byte-keyed vocab.
+    """
     pat = re.compile(
-        r"""'s|'t|'re|'ve|'m|'ll|'d| ?\w+| ?\d+| ?[^\s\w\d]+|\s+(?!\S)|\s+""",
+        r"""'s|'t|'re|'ve|'m|'ll|'d| ?[^\W\d_]+| ?\d+| ?[^\s\w]+|\s+(?!\S)|\s+""",
         re.UNICODE,
     )
     tokens: list[int] = []
     for word in pat.findall(text):
-        word = word.replace(' ', 'Ġ').replace('\n', 'Ċ').replace('\t', 'ĉ')
-        i = 0
-        while i < len(word):
-            best_id = -1
-            best_len = 0
-            for j in range(len(word), i, -1):
-                sub = word[i:j]
+        b = word.encode("utf-8")
+        i, n = 0, len(b)
+        while i < n:
+            matched = False
+            for j in range(n, i, -1):  # longest prefix first
+                sub = b[i:j]
                 if sub in token_to_id:
-                    best_id = token_to_id[sub]
-                    best_len = j - i
+                    tokens.append(token_to_id[sub])
+                    i = j
+                    matched = True
                     break
-            if best_id == -1:
+            if not matched:  # unknown byte -- skip it
                 i += 1
-            else:
-                tokens.append(best_id)
-                i += best_len
     return tokens
 
 
@@ -177,11 +179,14 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
         (n_vocab2,) = struct.unpack("<i", f.read(4))
         if n_vocab2 != n_vocab:
             raise ValueError(f"bad vocab size {n_vocab2} != {n_vocab}")
-        token_to_id: dict[str, int] = {}
-        id_to_token: dict[int, str] = {}
+        # Tokens are stored as the *raw bytes* of each piece (the convert script
+        # decodes GPT-2's byte-level encoding back to bytes), so many are not
+        # valid UTF-8 on their own. Key the vocab by bytes and match on bytes.
+        token_to_id: dict[bytes, int] = {}
+        id_to_token: dict[int, bytes] = {}
         for i in range(n_vocab):
             (length,) = struct.unpack("<I", f.read(4))
-            word = f.read(length).decode("utf-8")
+            word = f.read(length)
             token_to_id[word] = i
             id_to_token[i] = word
 
@@ -509,6 +514,9 @@ def main():
         t_predict = 0.0
         logits = None
         embd: list[int] = []
+        # tokens carry raw bytes that may split a multi-byte UTF-8 char across
+        # token boundaries; feed them through one incremental decoder.
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
         i = 0
         while i < len(embd_inp) + n_predict:
@@ -539,9 +547,8 @@ def main():
                 i -= 1
 
             for token_id in embd:
-                token = id_to_token.get(token_id, "")
-                token = token.replace('Ġ', ' ').replace('Ċ', '\n').replace('ĉ', '\t')
-                print(token, end="", flush=True)
+                piece = decoder.decode(id_to_token.get(token_id, b""))
+                print(piece, end="", flush=True)
 
             if embd[-1] == 50256:  # end-of-text
                 break
