@@ -31,8 +31,8 @@ from __future__ import annotations
 from .errors import GGMLError
 from .types import DType, dtype_from_numpy, dtype_to_numpy, F32, F16, I8, I16, I32, I64, F64, BF16
 from .tensor import Tensor, POOL_MAX, POOL_AVG
-from .context import Context
-from .graph import Graph
+from .context import Context, tensor_overhead
+from .graph import Graph, graph_overhead_custom
 from .gallocr import GAllocr
 from .backend import Backend, DEVICE_CPU, DEVICE_GPU, DEVICE_IGPU, DEVICE_ACCEL
 from .scheduler import Scheduler
@@ -47,7 +47,9 @@ __all__ = [
     "Tensor",
     "POOL_MAX", "POOL_AVG",
     "Context",
+    "tensor_overhead",
     "Graph",
+    "graph_overhead_custom",
     "GAllocr",
     "Backend",
     "DEVICE_CPU", "DEVICE_GPU", "DEVICE_IGPU", "DEVICE_ACCEL",

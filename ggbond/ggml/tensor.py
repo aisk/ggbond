@@ -15,7 +15,7 @@ import numpy as np
 
 import ggml as _ggml
 
-from .types import DType, dtype_to_numpy
+from .types import DType, F32, dtype_to_numpy
 
 if TYPE_CHECKING:
     from .context import Context
@@ -146,6 +146,39 @@ class Tensor:
         ``op`` is a ggml pooling op (:data:`POOL_MAX` / :data:`POOL_AVG`).
         """
         return self._wrap(_ggml.ggml_pool_1d(self._c, self.ptr, int(op), k0, s0, p0))
+
+    def im2col(
+        self,
+        data: "Tensor",
+        s0: int,
+        s1: int,
+        p0: int,
+        p1: int,
+        d0: int,
+        d1: int,
+        is_2d: bool,
+        dst_type: "DType" = F32,
+    ) -> "Tensor":
+        """Convert convolution windows to columns (``ggml_im2col``).
+
+        ``self`` is the kernel tensor and ``data`` is the input tensor, matching
+        ggml's ``ggml_im2col(ctx, kernel, data, ...)`` argument order.
+        """
+        return self._wrap(
+            _ggml.ggml_im2col(
+                self._c,
+                self.ptr,
+                data.ptr,
+                int(s0),
+                int(s1),
+                int(p0),
+                int(p1),
+                int(d0),
+                int(d1),
+                bool(is_2d),
+                int(dst_type),
+            )
+        )
 
     # -- shape ops ----------------------------------------------------------
 

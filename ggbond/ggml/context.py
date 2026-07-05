@@ -12,6 +12,11 @@ from .tensor import Tensor
 from .graph import Graph
 
 
+def tensor_overhead() -> int:
+    """Return bytes of context arena needed per tensor (``ggml_tensor_overhead``)."""
+    return _ggml.ggml_tensor_overhead()
+
+
 class Context:
     """Owns a ``ggml_context``: the arena that holds tensor metadata (and,
     when ``no_alloc=False``, tensor data).

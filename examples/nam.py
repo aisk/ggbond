@@ -34,8 +34,15 @@ import wave
 
 import numpy as np
 
-import ggml as _ggml
-from ggbond.ggml import Backend, Context, GAllocr, Tensor, F32
+from ggbond.ggml import (
+    Backend,
+    Context,
+    GAllocr,
+    Tensor,
+    F32,
+    graph_overhead_custom,
+    tensor_overhead,
+)
 
 NAM_MAX_NODES = 8192
 
@@ -68,10 +75,8 @@ def conv1d(ctx: Context, kernel: Tensor, x: Tensor, dilation: int = 1) -> Tensor
     ``(L, IC)``. Returns ne = ``(OL, OC)`` with ``OL = L - (K-1)*dilation``.
     Mirrors ``ggml_conv_1d`` but with an F32 im2col so F32 kernels are kept.
     """
-    im = Tensor(ctx, _ggml.ggml_im2col(
-        # (ctx, kernel, data, s0=1, s1, p0, p1, d0=dilation, d1, is_2D, dst_type)
-        ctx.ptr, kernel.ptr, x.ptr, 1, 0, 0, 0, dilation, 0, False, _ggml.GGML_TYPE_F32
-    ))  # ne = (IC*K, OL, N)
+    # (kernel, data, s0=1, s1, p0, p1, d0=dilation, d1, is_2d, dst_type)
+    im = kernel.im2col(x, 1, 0, 0, 0, dilation, 0, False, F32)  # ne = (IC*K, OL, N)
     ick, ol, n = _ne(im, 0), _ne(im, 1), _ne(im, 2)
     k, ic, oc = _ne(kernel, 0), _ne(kernel, 1), _ne(kernel, 2)
     im2 = im.reshape_2d(ick, n * ol)
@@ -91,8 +96,7 @@ def slice_tail(ctx: Context, t: Tensor, n: int) -> Tensor:
     if n > length:
         raise NamError(f"slice_tail: want {n} frames but tensor has {length}")
     off = (length - n) * _nb(t, 0)
-    view = Tensor(ctx, _ggml.ggml_view_2d(ctx.ptr, t.ptr, n, channels, _nb(t, 1), off))
-    return view.cont()
+    return t.view_2d(n, channels, _nb(t, 1), off).cont()
 
 
 def _act(t: Tensor, name: str) -> Tensor:
@@ -116,8 +120,8 @@ def apply_activation(ctx: Context, z: Tensor, spec: dict) -> Tensor:
     length, mid = _ne(z, 0), _ne(z, 1)
     half = mid // 2
     nb1 = _nb(z, 1)
-    a = Tensor(ctx, _ggml.ggml_view_2d(ctx.ptr, z.ptr, length, half, nb1, 0)).cont()
-    b = Tensor(ctx, _ggml.ggml_view_2d(ctx.ptr, z.ptr, length, half, nb1, half * nb1)).cont()
+    a = z.view_2d(length, half, nb1, 0).cont()
+    b = z.view_2d(length, half, nb1, half * nb1).cont()
     return _act(a, spec["primary"]).mul(_act(b, spec["secondary"]))
 
 
@@ -254,7 +258,7 @@ def load_model(path: str, backend: Backend) -> NamModel:
     n_tensors = 0
     for m in metas:
         n_tensors += 1 + 5 * len(m["dilations"]) + 1 + (1 if m["head_bias"] else 0)
-    ctx_w = Context(mem_size=_ggml.ggml_tensor_overhead() * (n_tensors + 16), no_alloc=True)
+    ctx_w = Context(mem_size=tensor_overhead() * (n_tensors + 16), no_alloc=True)
     model.ctx_w = ctx_w
 
     for ai, m in enumerate(metas):
@@ -367,8 +371,8 @@ def build_graph(model: NamModel, ctx: Context, n_samples: int):
 
 
 def _graph_buf_size() -> int:
-    return (_ggml.ggml_tensor_overhead() * NAM_MAX_NODES
-            + _ggml.ggml_graph_overhead_custom(NAM_MAX_NODES, False))
+    return (tensor_overhead() * NAM_MAX_NODES
+            + graph_overhead_custom(NAM_MAX_NODES, False))
 
 
 def run_offline(model: NamModel, backend: Backend, audio: np.ndarray) -> np.ndarray:

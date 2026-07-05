@@ -13,6 +13,11 @@ if TYPE_CHECKING:
     from .context import Context
 
 
+def graph_overhead_custom(size: int, grads: bool = False) -> int:
+    """Return bytes needed for a custom graph (``ggml_graph_overhead_custom``)."""
+    return _ggml.ggml_graph_overhead_custom(size, grads)
+
+
 class Graph:
     """A computation graph backed by an external :class:`Context`.
 
