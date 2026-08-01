@@ -18,21 +18,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ggml-python", specifier = ">=0.0.38" },
+    { name = "ggml-python", specifier = ">=0.0.45" },
     { name = "numpy" },
 ]
 provides-extras = ["dev"]
 
 [[package]]
 name = "ggml-python"
-version = "0.0.38"
+version = "0.0.45"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ac/64/7a54f55b82c3f7350afe6a18f28bcbd9f528fff6a130f2dd0190fd3977bb/ggml_python-0.0.38.tar.gz", hash = "sha256:be316ace034f85b47d2e0a2ec068722cf733bbd3d4be3fa17e0516dc8ed2e27e", size = 3143073, upload-time = "2026-06-02T06:59:52.611Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/0e/ef343189f9e31b651e57770d04a0e5fc64795d3ee9e8f46fe0fc5e0aa8e0/ggml_python-0.0.45.tar.gz", hash = "sha256:10aac52075cf3c7ef2b00d6c35b1c23f7b018dbeff8ae8df67339b4be1166f05", size = 3392650, upload-time = "2026-06-30T15:33:31.632Z" }
 
 [[package]]
 name = "numpy"

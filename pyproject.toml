@@ -24,7 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "ggml-python>=0.0.38",
+    "ggml-python>=0.0.45",
     "numpy",
 ]
 

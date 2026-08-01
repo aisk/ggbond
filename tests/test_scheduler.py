@@ -4,6 +4,11 @@ from ggbond.ggml import Backend, Scheduler
 
 
 class SchedulerValidationTests(unittest.TestCase):
+    def test_constructs_with_latest_scheduler_signature(self):
+        with Backend.cpu_init() as backend:
+            with Scheduler.from_backends(backend, op_offload=False) as scheduler:
+                self.assertIsNotNone(scheduler.ptr)
+
     def test_rejects_wrong_number_of_buffer_types(self):
         with Backend.cpu_init() as backend:
             with self.assertRaisesRegex(ValueError, "one buffer type per backend"):

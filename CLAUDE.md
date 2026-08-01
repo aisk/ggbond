@@ -8,7 +8,7 @@ GGBond is an object-oriented Python wrapper over GGML (Georgi Gerganov's Machine
 
 - **Language**: Pure Python 3.10+
 - **Build backend**: `hatchling` (pure-Python wheel, no compilation step)
-- **Dependencies**: `ggml-python>=0.0.38` (provides the `ggml` ctypes module and `ggml.utils`) and `numpy` (the data-transfer API is numpy-based).
+- **Dependencies**: `ggml-python>=0.0.45` (provides the `ggml` ctypes module and `ggml.utils`) and `numpy` (the data-transfer API is numpy-based).
 
 All library code lives under **`ggbond/ggml/`**. Every checked-in example uses the current API: `simple.py`, `gpt2.py`, `magika.py`, and `nam.py`. The model-backed examples require external model files.
 

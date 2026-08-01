@@ -40,6 +40,7 @@ class Scheduler:
         bufts=None,
         graph_size: Optional[int] = None,
         parallel: bool = False,
+        op_offload: bool = True,
     ):
         backends = list(backends)
         if not backends:
@@ -64,7 +65,9 @@ class Scheduler:
         elif graph_size <= 0:
             raise ValueError(f"Scheduler graph_size must be positive, got {graph_size}")
         self.ptr = nonnull(
-            _ggml.ggml_backend_sched_new(be_arr, buft_arr, n, graph_size, parallel),
+            _ggml.ggml_backend_sched_new(
+                be_arr, buft_arr, n, graph_size, parallel, op_offload
+            ),
             "ggml_backend_sched_new",
         )
         self._backends = backends

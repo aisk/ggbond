@@ -11,7 +11,7 @@ backend allocator allocates and computes it. Nothing is lazy.
 ## Requirements and installation
 
 - Python 3.10+
-- `ggml-python>=0.0.38`
+- `ggml-python>=0.0.45`
 - NumPy
 
 ```bash
