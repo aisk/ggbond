@@ -40,6 +40,13 @@ MAGIKA_LABELS = [
 ]
 
 
+def _read_exact(f, size: int, what: str) -> bytes:
+    data = f.read(size)
+    if len(data) != size:
+        raise ValueError(f"truncated model while reading {what}: expected {size} bytes, got {len(data)}")
+    return data
+
+
 @dataclass
 class Prediction:
     """Single file type prediction result."""
@@ -73,8 +80,10 @@ class Magika:
             for i in range(self._gguf.n_tensors):
                 name = self._gguf.get_tensor_name(i)
                 t = self._gguf.context.get_tensor(name)
+                if t is None:
+                    raise ValueError(f"GGUF tensor metadata is missing '{name}'")
                 f.seek(self._gguf.data_offset + self._gguf.get_tensor_offset(i))
-                t.set_raw(f.read(t.nbytes))
+                t.set_raw(_read_exact(f, t.nbytes, f"tensor '{name}' data"))
         self._weights = {
             self._gguf.get_tensor_name(i): self._gguf.context.get_tensor(
                 self._gguf.get_tensor_name(i)

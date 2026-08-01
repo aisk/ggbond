@@ -36,6 +36,13 @@ from ggbond.ggml import Backend, Context, GAllocr, Tensor, DType, F32, I32
 GPT2_MAX_NODES = 4096
 
 
+def _read_exact(f, size: int, what: str) -> bytes:
+    data = f.read(size)
+    if len(data) != size:
+        raise ValueError(f"truncated model while reading {what}: expected {size} bytes, got {len(data)}")
+    return data
+
+
 # ============================================================================
 # Tokenizer + sampling (model-format independent; ported from common.cpp)
 # ============================================================================
@@ -156,12 +163,22 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
 
     with open(fname, "rb") as f:
         # -- verify magic --
-        (magic,) = struct.unpack("<I", f.read(4))
+        (magic,) = struct.unpack("<I", _read_exact(f, 4, "magic"))
         if magic != _ggml.GGML_FILE_MAGIC:
             raise ValueError(f"invalid model file '{fname}' (bad magic)")
 
         # -- hparams -- (n_ctx here is the *trained* context length)
-        n_vocab, n_ctx_train, n_embd, n_head, n_layer, ftype = struct.unpack("<6i", f.read(24))
+        n_vocab, n_ctx_train, n_embd, n_head, n_layer, ftype = struct.unpack(
+            "<6i", _read_exact(f, 24, "hyperparameters")
+        )
+        if min(n_vocab, n_ctx_train, n_embd, n_head, n_layer) <= 0:
+            raise ValueError("model contains invalid non-positive hyperparameters")
+        if n_embd % n_head != 0:
+            raise ValueError(f"model embedding size {n_embd} is not divisible by {n_head} heads")
+        if not (0 < n_ctx <= n_ctx_train):
+            raise ValueError(
+                f"requested context size must be between 1 and the trained size {n_ctx_train}, got {n_ctx}"
+            )
         qntvr = ftype // _ggml.GGML_QNT_VERSION_FACTOR
         print(f"gpt2_model_load: n_vocab = {n_vocab}")
         print(f"gpt2_model_load: n_ctx   = {n_ctx_train}")
@@ -176,7 +193,7 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
         wtype = DType(_ggml.ggml_ftype_to_ggml_type(ftype))
 
         # -- vocab (read inline, byte-level-encoded UTF-8 strings) --
-        (n_vocab2,) = struct.unpack("<i", f.read(4))
+        (n_vocab2,) = struct.unpack("<i", _read_exact(f, 4, "vocabulary size"))
         if n_vocab2 != n_vocab:
             raise ValueError(f"bad vocab size {n_vocab2} != {n_vocab}")
         # Tokens are stored as the *raw bytes* of each piece (the convert script
@@ -185,8 +202,8 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
         token_to_id: dict[bytes, int] = {}
         id_to_token: dict[int, bytes] = {}
         for i in range(n_vocab):
-            (length,) = struct.unpack("<I", f.read(4))
-            word = f.read(length)
+            (length,) = struct.unpack("<I", _read_exact(f, 4, f"token {i} length"))
+            word = _read_exact(f, length, f"token {i}")
             token_to_id[word] = i
             id_to_token[i] = word
 
@@ -261,22 +278,42 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
         # -- load weights --
         total_size = 0
         has_lm_head = False
+        loaded_names = set()
         while True:
             header = f.read(12)
-            if len(header) < 12:
+            if not header:
                 break  # EOF
+            if len(header) != 12:
+                raise ValueError(
+                    f"truncated model while reading tensor header: expected 12 bytes, got {len(header)}"
+                )
             n_dims, length, ttype = struct.unpack("<3i", header)
+            if n_dims not in (1, 2):
+                raise ValueError(f"invalid tensor dimension count {n_dims}")
+            if length < 0:
+                raise ValueError(f"invalid negative tensor name length {length}")
             ne = [1, 1]
             nelements = 1
             for i in range(n_dims):
-                (ne[i],) = struct.unpack("<i", f.read(4))
+                (ne[i],) = struct.unpack(
+                    "<i", _read_exact(f, 4, f"tensor dimension {i}")
+                )
+                if ne[i] <= 0:
+                    raise ValueError(f"invalid tensor dimension {ne[i]}")
                 nelements *= ne[i]
-            name = f.read(length).decode("utf-8")
+            name = _read_exact(f, length, "tensor name").decode("utf-8")
 
             if name not in tensors:
                 raise ValueError(f"unknown tensor '{name}' in model file")
+            if name in loaded_names:
+                raise ValueError(f"duplicate tensor '{name}' in model file")
             tensor = tensors[name]
             tensor.name = name
+
+            if ttype != int(tensor.dtype):
+                raise ValueError(
+                    f"tensor '{name}' has type {ttype}, expected {int(tensor.dtype)} ({tensor.dtype.name})"
+                )
 
             if tensor.nelements != nelements:
                 raise ValueError(f"tensor '{name}' has wrong size in model file")
@@ -286,7 +323,8 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
                     f"tensor '{name}' has wrong shape: got {list(te)}, expected {ne[:n_dims]}"
                 )
 
-            tensor.set_raw(f.read(tensor.nbytes))
+            tensor.set_raw(_read_exact(f, tensor.nbytes, f"tensor '{name}' data"))
+            loaded_names.add(name)
 
             # GPT-2 ties the LM head to the token embedding (wte) unless the file
             # carries an explicit lm_head.
@@ -294,8 +332,17 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
                 model.lm_head = tensor
             if name == "model/lm_head":
                 has_lm_head = True
+                model.lm_head = tensor
 
             total_size += tensor.nbytes
+
+        required_names = set(tensors)
+        required_names.discard("model/lm_head")  # optional: tied to model/wte
+        missing = sorted(required_names - loaded_names)
+        if missing:
+            preview = ", ".join(missing[:5])
+            suffix = " ..." if len(missing) > 5 else ""
+            raise ValueError(f"model is missing {len(missing)} required tensors: {preview}{suffix}")
 
         print(f"gpt2_model_load: model size  = {total_size / 1024.0 / 1024.0:8.2f} MB")
 
