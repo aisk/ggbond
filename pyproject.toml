@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ggbond"
 version = "0.1.0"
-description = "Simple and naive GGML binding"
+description = "A pure-Python object-oriented wrapper over GGML"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

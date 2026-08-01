@@ -10,7 +10,7 @@ GGBond is an object-oriented Python wrapper over GGML (Georgi Gerganov's Machine
 - **Build backend**: `hatchling` (pure-Python wheel, no compilation step)
 - **Dependencies**: `ggml-python>=0.0.38` (provides the `ggml` ctypes module and `ggml.utils`) and `numpy` (the data-transfer API is numpy-based).
 
-All live code lives under **`ggbond/ggml/`**. Some top-level `ggbond/*.py` modules and most `examples/*.py` are leftovers from an earlier design and do not run — only `examples/simple.py` uses the current API.
+All library code lives under **`ggbond/ggml/`**. Every checked-in example uses the current API: `simple.py`, `gpt2.py`, `magika.py`, and `nam.py`. The model-backed examples require external model files.
 
 ## Development Commands
 
@@ -18,15 +18,15 @@ All live code lives under **`ggbond/ggml/`**. Some top-level `ggbond/*.py` modul
 # Editable install (no compile step — pure Python). uv is the project's tool of choice (uv.lock present).
 uv pip install -e .          # or: pip install -e .
 
-# Smoke test the current API
+# Tests and smoke test
+.venv/bin/python -m unittest discover -v       # or: uv run python -m unittest discover -v
 .venv/bin/python examples/simple.py            # or: uv run examples/simple.py
-.venv/bin/python examples/simple.py -b cuda    # select backend (cpu|cuda|metal|hip)
 ```
 
-There is no test suite, linter config, or CI. `examples/simple.py` is the only runnable example and the de-facto smoke test.
+The standard-library `unittest` suite lives under `tests/`. `examples/simple.py` is the numerical smoke test.
 
 ### Backend availability
-Backend init dispatches in `ggbond/ggml/backend.py` (`_init_backend`). Whether `cuda`/`metal`/`hip` actually work depends on **how the installed `ggml-python` wheel was built** (this repo does not build GGML). `cpu` is always available. HIP is guarded with a `hasattr` check and raises a clear error if absent.
+Backend factories live in `ggbond/ggml/backend.py`; the GPT-2 and NAM examples provide their own `_init_backend` CLI dispatch. Whether `cuda`/`metal`/`hip` actually work depends on **how the installed `ggml-python` package was built** (this repo does not build GGML). `cpu` is always available. Unavailable optional backends raise `GGMLError`.
 
 ## Architecture
 
@@ -40,11 +40,11 @@ Everything live lives under **`ggbond/ggml/`** — a thin OO wrapper whose class
 | `tensor.py` | `Tensor` | A `(Context, ggml_tensor_p)` pair. Op methods return new `Tensor`s in the same context. Simple ops are table-generated from `_UNARY_OPS` / `_BINARY_OPS`; scalar/shape ops (`scale`, `norm`, `rms_norm`, `reshape_*`, `permute`, `view_*`) are explicit methods. **This is where numpy lives**: `set(x)` uploads any array-like (incl. plain Python lists — runs `np.ascontiguousarray`) and `get(out)` downloads into a **pre-allocated numpy array** via `out.ctypes`. These wrap ggml's sync transfer `ggml_backend_tensor_set/get`, which are keyed on the tensor's own buffer and take **no backend handle** — hence they live on `Tensor`, not `Backend`. The tensor must already be allocated. |
 | `graph.py` | `Graph` | `ggml_cgraph`. Holds a strong ref to its backing `Context`; no independent `close()` (freed with the context). `build_forward_expand()`, `compute_with_ctx()` (CPU-only convenience for `no_alloc=False`), node iteration via struct fields. |
 | `gallocr.py` | `GAllocr` | `ggml_gallocr`. `from_backend(be)`, `reserve()`, `alloc_graph()`. |
-| `backend.py` | `Backend` | CPU/CUDA/Metal/HIP handle. Constructed by `kind` (`ggml_backend_{cpu,cuda,...}_init`) **or** via the device registry: `Backend.load_all()` then `Backend.init_best()` / `Backend.init_by_type(DEVICE_CPU\|DEVICE_GPU\|DEVICE_IGPU\|DEVICE_ACCEL)` (the `DEVICE_*` constants mirror ggml's `enum ggml_backend_dev_type`, exported from `ggbond.ggml`). Tracks buffers it allocates and frees them on `close()`. Tensor data transfer is **not** here (it lives on `Tensor`, see above). |
+| `backend.py` | `Backend` | CPU/CUDA/Metal/HIP handle. Use `Backend.cpu_init()` / `cuda_init()` / `metal_init()` / `hip_init()`, or the device registry: `Backend.load_all()` then `Backend.init_best()` / `Backend.init_by_type(DEVICE_CPU\|DEVICE_GPU\|DEVICE_IGPU\|DEVICE_ACCEL)`. The constructor itself adopts a raw backend pointer. Tracks buffers it allocates and frees them on `close()`. Tensor data transfer is **not** here (it lives on `Tensor`, see above). |
 | `scheduler.py` | `Scheduler` | `ggml_backend_sched`. Splits a graph across one or more backends and computes it — the multi-backend analog of `GAllocr` + `Backend.compute`. `from_backends(*backends)` factory. Holds strong refs to its `Backend`s so they outlive it; `close()` frees only the `ggml_backend_sched` (the backends are owned by their own wrappers). |
 | `gguf.py` | `GGUF` | `gguf_context` (parsed GGUF header/metadata). `from_file(path)` parses via `gguf_init_from_file` and, by default, also wraps the metadata `ggml_context` it fills as `.context`. **Ownership is split**: `GGUF.close()` frees only the `gguf_context`; `.context` is an independently owned `Context` you must close yourself (and that must outlive any graph referencing its tensors). `GGUF` does *not* read tensor data — `data_offset` / `get_tensor_offset` / `get_tensor_name` give the caller what they need to seek into the file and upload weights. |
 
-`ggbond/__init__.py` re-exports the subpackage as `ggbond.ggml` plus `Context, Tensor, Backend, Graph, GAllocr, DType` (note: `GGUF` is exported from `ggbond.ggml`, not the top-level `ggbond`).
+`ggbond/__init__.py` exports only `__version__`. Import all wrapper classes and constants explicitly from `ggbond.ggml`.
 
 ### Canonical computation flow
 
@@ -57,11 +57,12 @@ from ggbond.ggml import Backend, Context, GAllocr, F32
 a = np.random.rand(4, 3).astype(np.float32)
 b = np.random.rand(2, 3).astype(np.float32)
 
-with Backend("cpu", n_threads=4) as be, \
+with Backend.cpu_init() as be, \
         Context(mem_size=1 << 20, no_alloc=True) as ctx:
-    ta = ctx.new_tensor_2d(F32, *reversed(a.shape), name="a")  # ggml order = reversed numpy shape
-    tb = ctx.new_tensor_2d(F32, *reversed(b.shape), name="b")
-    tc = ta.mul_mat(tb)                                        # build metadata graph
+    be.set_n_threads(4)
+    ta = ctx.new_tensor_2d(F32, *reversed(a.shape), name="a").set_input()
+    tb = ctx.new_tensor_2d(F32, *reversed(b.shape), name="b").set_input()
+    tc = ta.mul_mat(tb).set_output()                            # builds b @ a.T
 
     be.alloc_ctx_tensors(ctx)                                  # allocate backend memory for ctx tensors
     ta.set(a)                                                  # upload via the tensor (lists also accepted)
@@ -79,10 +80,10 @@ with Backend("cpu", n_threads=4) as be, \
 - `Tensor.ne` is **GGML order** `(ne0, ne1, …)` — column-major-ish, the reverse of numpy.
 - `new_tensor_Nd` / `reshape_Nd` take dims in **GGML order**, so construct from a numpy array with `*reversed(arr.shape)`.
 - To read a result back, allocate the output array with `np.empty(tuple(reversed(tensor.ne)), …)`.
-- `a.mul_mat(b)` requires `a.ne[0] == b.ne[0]` (shared inner dim) and yields `ne = (a.ne[1], b.ne[1])`. This is GGML's `ggml_mul_mat`, **not** a plain numpy `@`; to compute numpy `a @ b` arrange it as `b.mul_mat(a)`.
+- `a.mul_mat(b)` requires `a.ne[0] == b.ne[0]` (shared inner dim) and yields `ne = (a.ne[1], b.ne[1])`. For NumPy arrays with matching column counts, `ta.mul_mat(tb)` computes `b @ a.T`. To compute a conventional `left @ right`, store `right.T` as the first GGML operand and `left` as the second.
 
 ### Lifecycle rules
-- A `Context` must outlive every `Tensor`/`Graph` it produced — `ggml_free` releases all their metadata at once. `Tensor` and `Graph` hold strong refs back to their `Context` to enforce this; don't break those refs.
+- A `Context` must outlive every `Tensor`/`Graph` it produced — `ggml_free` releases all their metadata at once. `Tensor` and `Graph` keep the context alive unless it is explicitly closed. A `Context` also retains an external `mem_buffer` object for its native lifetime.
 - For `GGUF`, remember the split ownership above: closing the `GGUF` does **not** close its data `.context`.
 - All wrappers are context managers with idempotent `close()` + `__del__`. Prefer `with` blocks.
 
