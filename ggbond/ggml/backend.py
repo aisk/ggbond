@@ -52,19 +52,31 @@ class Backend:
     @classmethod
     def cuda_init(cls, device: int = 0) -> "Backend":
         """Initialize CUDA device ``device`` (``ggml_backend_cuda_init``)."""
-        return cls(_ggml.ggml_backend_cuda_init(device), kind="cuda")
+        try:
+            ptr = _ggml.ggml_backend_cuda_init(device)
+        except RuntimeError as exc:
+            raise GGMLError(f"CUDA backend initialization failed: {exc}") from exc
+        return cls(ptr, kind="cuda")
 
     @classmethod
     def metal_init(cls) -> "Backend":
         """Initialize the Metal backend (``ggml_backend_metal_init``)."""
-        return cls(_ggml.ggml_backend_metal_init(), kind="metal")
+        try:
+            ptr = _ggml.ggml_backend_metal_init()
+        except RuntimeError as exc:
+            raise GGMLError(f"Metal backend initialization failed: {exc}") from exc
+        return cls(ptr, kind="metal")
 
     @classmethod
     def hip_init(cls, device: int = 0) -> "Backend":
         """Initialize HIP/ROCm device ``device`` (``ggml_backend_hip_init``)."""
         if not hasattr(_ggml, "ggml_backend_hip_init"):
             raise GGMLError("HIP backend is not available in this ggml build")
-        return cls(_ggml.ggml_backend_hip_init(device), kind="hip")
+        try:
+            ptr = _ggml.ggml_backend_hip_init(device)
+        except RuntimeError as exc:
+            raise GGMLError(f"HIP backend initialization failed: {exc}") from exc
+        return cls(ptr, kind="hip")
 
     @staticmethod
     def load_all() -> None:
