@@ -44,10 +44,25 @@ class Scheduler:
         backends = list(backends)
         if not backends:
             raise ValueError("Scheduler needs at least one backend")
+        if any(backend.ptr is None for backend in backends):
+            raise ValueError("Scheduler backends must be open")
         n = len(backends)
         be_arr = _ptr_array([b.ptr for b in backends])
-        buft_arr = _ptr_array(list(bufts)) if bufts is not None else None
-        graph_size = graph_size or _ggml.GGML_DEFAULT_GRAPH_SIZE
+        if bufts is None:
+            buft_arr = None
+        else:
+            bufts = list(bufts)
+            if len(bufts) != n:
+                raise ValueError(
+                    f"Scheduler needs one buffer type per backend: got {len(bufts)} for {n} backends"
+                )
+            if any(not buft for buft in bufts):
+                raise ValueError("Scheduler buffer types must be non-null")
+            buft_arr = _ptr_array(bufts)
+        if graph_size is None:
+            graph_size = _ggml.GGML_DEFAULT_GRAPH_SIZE
+        elif graph_size <= 0:
+            raise ValueError(f"Scheduler graph_size must be positive, got {graph_size}")
         self.ptr = nonnull(
             _ggml.ggml_backend_sched_new(be_arr, buft_arr, n, graph_size, parallel),
             "ggml_backend_sched_new",
