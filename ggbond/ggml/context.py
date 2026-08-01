@@ -40,6 +40,10 @@ class Context:
     ):
         params = _ggml.ggml_init_params(mem_size, mem_buffer, no_alloc)
         self.ptr = nonnull(_ggml.ggml_init(params), "ggml_init")
+        # ggml borrows external arena memory for the entire context lifetime.
+        # Retain the object passed by the caller so ctypes-owned buffers are not
+        # garbage-collected while the native context still points into them.
+        self._mem_buffer = mem_buffer
         self.no_alloc = no_alloc
         self._owns = True
         self._closed = False
@@ -55,6 +59,7 @@ class Context:
         """
         self = cls.__new__(cls)
         self.ptr = nonnull(ptr, "ggml_context")
+        self._mem_buffer = None
         self.no_alloc = no_alloc
         self._owns = owns
         self._closed = False
@@ -128,6 +133,7 @@ class Context:
                 _ggml.ggml_free(self.ptr)
             self._closed = True
             self.ptr = None
+            self._mem_buffer = None
 
     def __enter__(self) -> "Context":
         return self
