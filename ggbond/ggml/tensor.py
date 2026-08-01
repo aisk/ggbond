@@ -269,6 +269,8 @@ class Tensor:
         Wraps ``ggml_backend_tensor_set``.
         """
         mv = memoryview(data).cast("B")
+        if offset < 0:
+            raise ValueError(f"set_raw: offset must be non-negative, got {offset}")
         if offset + mv.nbytes > self.nbytes:
             raise ValueError(
                 f"set_raw: {mv.nbytes} bytes at offset {offset} exceed tensor "
