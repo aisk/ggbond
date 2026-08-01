@@ -36,9 +36,10 @@ def main():
                 Scheduler.from_backends(backends) as sched:
             # ggml shape is the reverse of numpy's; a.ne[0] == b.ne[0] (== 2) is
             # the shared inner dim mul_mat contracts over.
-            ta = ctx.new_tensor_2d(F32, *reversed(a.shape), name="a")
-            tb = ctx.new_tensor_2d(F32, *reversed(b.shape), name="b")
+            ta = ctx.new_tensor_2d(F32, *reversed(a.shape), name="a").set_input()
+            tb = ctx.new_tensor_2d(F32, *reversed(b.shape), name="b").set_input()
             tc = ta.mul_mat(tb)  # ggml_mul_mat(a, b): ne -> (a.ne1, b.ne1)
+            tc.set_output()
 
             graph = ctx.new_graph().build_forward_expand(tc)
 
@@ -55,6 +56,8 @@ def main():
     finally:
         for backend in backends:
             backend.close()
+
+    np.testing.assert_allclose(result, b @ a.T)
 
     rows, cols = result.shape
     print(f"mul mat ({cols} x {rows}):")
