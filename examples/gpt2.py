@@ -393,9 +393,8 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
         # attention: fused QKV projection -> [3*n_embd, N]
         cur = R(layer.c_attn_attn_w).mul_mat(cur).add(R(layer.c_attn_attn_b))
 
-        # row stride of the contiguous [3*n_embd, N] QKV tensor (== cur->nb[1]);
-        # computed rather than read off .nb, which truncates trailing 1-dims (N==1)
-        nb1 = cur.ne[0] * cur.element_size
+        # row stride of the contiguous [3*n_embd, N] QKV tensor
+        nb1 = cur.nb4[1]
         Qcur = cur.view_2d(n_embd, N, nb1, 0 * 4 * n_embd)
         Kcur = cur.view_2d(n_embd, N, nb1, 1 * 4 * n_embd)
         Vcur = cur.view_2d(n_embd, N, nb1, 2 * 4 * n_embd)

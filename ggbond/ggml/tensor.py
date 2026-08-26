@@ -77,15 +77,48 @@ class Tensor:
 
     @property
     def ne(self) -> tuple:
-        """Dimensions in ggml order ``(ne0, ne1, ...)``."""
+        """Dimensions in ggml order ``(ne0, ne1, ...)``, trailing 1s trimmed.
+
+        The length follows ``ggml_n_dims``, so a ``[n, 1]`` tensor reports a
+        single dimension. Use :attr:`ne4` for the untrimmed tuple ggml actually
+        stores.
+        """
         n = _ggml.ggml_n_dims(self.ptr)
         return tuple(self.ptr.contents.ne[:n])
 
     @property
     def nb(self) -> tuple:
-        """Byte strides in ggml order."""
+        """Byte strides in ggml order, trimmed like :attr:`ne`.
+
+        Trimming drops the stride of any trailing 1-sized dimension, which is
+        exactly the stride you need to build a view over such a tensor. Use
+        :attr:`nb4` to get all four strides.
+        """
         n = _ggml.ggml_n_dims(self.ptr)
         return tuple(self.ptr.contents.nb[:n])
+
+    @property
+    def ne4(self) -> tuple:
+        """All four dimensions in ggml order, exactly as ggml stores them."""
+        return tuple(self.ptr.contents.ne[:4])
+
+    @property
+    def nb4(self) -> tuple:
+        """All four byte strides in ggml order, exactly as ggml stores them."""
+        return tuple(self.ptr.contents.nb[:4])
+
+    @property
+    def shape(self) -> tuple:
+        """Dimensions in numpy order -- :attr:`ne` reversed.
+
+        The shape to allocate a download buffer for :meth:`get` with.
+        """
+        return tuple(reversed(self.ne))
+
+    @property
+    def n_dims(self) -> int:
+        """Number of dimensions ggml reports (``ggml_n_dims``)."""
+        return _ggml.ggml_n_dims(self.ptr)
 
     @property
     def dtype(self) -> "DType":
