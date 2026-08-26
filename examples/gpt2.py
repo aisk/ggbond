@@ -367,10 +367,8 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
     n_embd, n_layer, n_ctx, n_head = hp.n_embd, hp.n_layer, hp.n_ctx, hp.n_head
 
     # Rebind weight/KV tensors to this graph's context so op-result nodes land
-    # here (the weight context is sized only for weight metadata). The
-    # ggml_tensor pointers are shared; a graph may freely span both contexts.
-    def R(t: Tensor) -> Tensor:
-        return Tensor(ctx, t.ptr)
+    # here (the weight context is sized only for weight metadata).
+    R = ctx.ref
 
     memory_k = R(model.memory_k)
     memory_v = R(model.memory_v)

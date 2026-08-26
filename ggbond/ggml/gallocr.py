@@ -18,6 +18,11 @@ class GAllocr:
     """Allocates the working memory for a computation graph from a backend
     buffer type. Use :meth:`reserve` to pre-compute the requirement, then
     :meth:`alloc_graph` before computing.
+
+    The allocator owns the memory holding every tensor it allocated, which is
+    every graph node that had no buffer of its own. Reading such a tensor after
+    :meth:`close` (or after leaving its ``with`` block) reads freed memory and
+    silently yields garbage, so download results before the allocator goes away.
     """
 
     def __init__(self, buffer_type):

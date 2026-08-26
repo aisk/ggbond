@@ -119,6 +119,18 @@ class Context:
             yield cur
             cur = self.next_tensor(cur)
 
+    def ref(self, tensor: Tensor) -> Tensor:
+        """Return ``tensor`` rebound to this context, sharing its ``ggml_tensor``.
+
+        Op methods allocate their result in the receiver's context, so a graph
+        built here that reads a tensor created elsewhere (model weights, a KV
+        cache) must go through this first, or the result nodes would land in the
+        weight context and exhaust it. The underlying ``ggml_tensor`` is shared,
+        not copied, and a graph may freely span both contexts as long as both
+        outlive it.
+        """
+        return Tensor(self, tensor.ptr)
+
     # -- graph factory ------------------------------------------------------
 
     def new_graph(self, size: Optional[int] = None, grads: bool = False) -> Graph:
