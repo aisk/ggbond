@@ -42,6 +42,7 @@ from .tensor import (
 from .context import Context, tensor_overhead
 from .graph import Graph, graph_overhead_custom
 from .gallocr import GAllocr
+from .buffer import Buffer, BufferType
 from .backend import Backend, DEVICE_CPU, DEVICE_GPU, DEVICE_IGPU, DEVICE_ACCEL
 from .scheduler import Scheduler
 from .gguf import GGUF
@@ -60,6 +61,8 @@ __all__ = [
     "Graph",
     "graph_overhead_custom",
     "GAllocr",
+    "Buffer",
+    "BufferType",
     "Backend",
     "DEVICE_CPU", "DEVICE_GPU", "DEVICE_IGPU", "DEVICE_ACCEL",
     "Scheduler",

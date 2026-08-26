@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 import ggml as _ggml
 
+from .buffer import BufferType
 from .errors import GGMLError, check_status, nonnull
 
 if TYPE_CHECKING:
@@ -52,7 +53,7 @@ class Scheduler:
         if bufts is None:
             buft_arr = None
         else:
-            bufts = list(bufts)
+            bufts = [b.ptr if isinstance(b, BufferType) else b for b in bufts]
             if len(bufts) != n:
                 raise ValueError(
                     f"Scheduler needs one buffer type per backend: got {len(bufts)} for {n} backends"
@@ -120,9 +121,21 @@ class Scheduler:
     def set_tensor_backend(self, tensor: "Tensor", backend: "Backend") -> None:
         _ggml.ggml_backend_sched_set_tensor_backend(self.ptr, tensor.ptr, backend.ptr)
 
-    def get_tensor_backend(self, tensor: "Tensor"):
-        """Return the raw ``ggml_backend_t`` handle assigned to ``tensor`` (or ``None``)."""
-        return _ggml.ggml_backend_sched_get_tensor_backend(self.ptr, tensor.ptr)
+    def get_tensor_backend(self, tensor: "Tensor") -> "Optional[Backend]":
+        """Return the :class:`Backend` assigned to ``tensor``, or ``None``.
+
+        The answer is one of the backends this scheduler was built from; a
+        tensor with no assignment (or one assigned to a backend the scheduler
+        does not own) yields ``None``.
+        """
+        ptr = _ggml.ggml_backend_sched_get_tensor_backend(self.ptr, tensor.ptr)
+        if not ptr:
+            return None
+        address = ctypes.cast(ptr, ctypes.c_void_p).value
+        for backend in self._backends:
+            if ctypes.cast(backend.ptr, ctypes.c_void_p).value == address:
+                return backend
+        return None
 
     # -- lifecycle ----------------------------------------------------------
 

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Optional
 
 import ggml as _ggml
 
+from .buffer import Buffer, BufferType
 from .errors import GGMLError, check_status, nonnull
 
 if TYPE_CHECKING:
@@ -105,6 +106,11 @@ class Backend:
     # -- queries ------------------------------------------------------------
 
     @property
+    def name(self) -> str:
+        """The backend's own name (``ggml_backend_name``), e.g. ``"CPU"``."""
+        return _ggml.ggml_backend_name(self.ptr).decode()
+
+    @property
     def is_cpu(self) -> bool:
         return bool(_ggml.ggml_backend_is_cpu(self.ptr))
 
@@ -113,19 +119,35 @@ class Backend:
             raise GGMLError("set_n_threads is only valid for the CPU backend")
         _ggml.ggml_backend_cpu_set_n_threads(self.ptr, n)
 
-    def buffer_type(self):
-        return _ggml.ggml_backend_get_default_buffer_type(self.ptr)
+    def buffer_type(self) -> "BufferType":
+        """This backend's default buffer type."""
+        return BufferType(_ggml.ggml_backend_get_default_buffer_type(self.ptr))
 
     # -- allocation ---------------------------------------------------------
 
-    def alloc_ctx_tensors(self, ctx: "Context"):
-        """Allocate backend memory for every tensor defined in ``ctx``."""
-        buf = nonnull(
-            _ggml.ggml_backend_alloc_ctx_tensors(ctx.ptr, self.ptr),
-            "ggml_backend_alloc_ctx_tensors",
+    def alloc_ctx_tensors(self, ctx: "Context") -> "Buffer":
+        """Allocate backend memory for every tensor defined in ``ctx``.
+
+        The returned :class:`Buffer` is owned by this backend and freed on
+        :meth:`close`; call :meth:`Buffer.release` to manage it yourself.
+        """
+        buffer = Buffer(
+            nonnull(
+                _ggml.ggml_backend_alloc_ctx_tensors(ctx.ptr, self.ptr),
+                "ggml_backend_alloc_ctx_tensors",
+            ),
+            owner=self,
         )
-        self._buffers.append(buf)
-        return buf
+        self._buffers.append(buffer)
+        return buffer
+
+    def disown_buffer(self, buffer: "Buffer") -> None:
+        """Stop tracking ``buffer`` so :meth:`close` no longer frees it.
+
+        Called by :meth:`Buffer.release`; the buffer must still be freed before
+        this backend is closed.
+        """
+        self._buffers = [b for b in self._buffers if b is not buffer]
 
     # -- compute ------------------------------------------------------------
 
@@ -141,9 +163,10 @@ class Backend:
     def close(self) -> None:
         if self._closed:
             return
-        for buf in self._buffers:
-            if buf is not None:
-                _ggml.ggml_backend_buffer_free(buf)
+        for buffer in self._buffers:
+            if buffer.ptr is not None:
+                _ggml.ggml_backend_buffer_free(buffer.ptr)
+                buffer.ptr = None
         self._buffers.clear()
         if self.ptr is not None:
             _ggml.ggml_backend_free(self.ptr)

@@ -261,7 +261,7 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
 
         # allocate a backend buffer for all weight tensors
         buf_w = backend.alloc_ctx_tensors(ctx_w)
-        size_mb = _ggml.ggml_backend_buffer_get_size(buf_w) / (1024.0 * 1024.0)
+        size_mb = buf_w.size / (1024.0 * 1024.0)
         print(f"gpt2_model_load: backend buffer size = {size_mb:6.2f} MB")
 
         # -- key + value memory (uses the *user* n_ctx) --
@@ -272,7 +272,7 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
         model.memory_k = ctx_kv.new_tensor_1d(F32, n_elements, name="memory_k")
         model.memory_v = ctx_kv.new_tensor_1d(F32, n_elements, name="memory_v")
         buf_kv = backend.alloc_ctx_tensors(ctx_kv)
-        kv_mb = _ggml.ggml_backend_buffer_get_size(buf_kv) / (1024.0 * 1024.0)
+        kv_mb = buf_kv.size / (1024.0 * 1024.0)
         print(f"gpt2_model_load: memory size = {kv_mb:8.2f} MB, n_mem = {n_mem}")
 
         # -- load weights --
