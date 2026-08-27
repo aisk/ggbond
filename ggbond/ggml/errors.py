@@ -10,17 +10,28 @@ from __future__ import annotations
 
 import ggml as _ggml
 
-__all__ = ["GGMLError", "check_status", "nonnull"]
+__all__ = ["GGMLError", "check_status", "nonnull", "status_name"]
 
 
 class GGMLError(RuntimeError):
     """Raised when an underlying ggml call fails."""
 
 
+def status_name(status) -> str:
+    """Return ggml's name for a status code (``ggml_status_to_string``)."""
+    try:
+        name = _ggml.ggml_status_to_string(int(status))
+    except Exception:  # pragma: no cover - older bindings without the helper
+        return str(int(status))
+    return name.decode() if isinstance(name, bytes) else str(name)
+
+
 def check_status(status, what: str) -> None:
     """Raise :class:`GGMLError` unless ``status`` is ``GGML_STATUS_SUCCESS``."""
     if int(status) != _ggml.GGML_STATUS_SUCCESS:
-        raise GGMLError(f"{what} failed with status {int(status)}")
+        raise GGMLError(
+            f"{what} failed with status {int(status)} ({status_name(status)})"
+        )
 
 
 def nonnull(ptr, what: str):

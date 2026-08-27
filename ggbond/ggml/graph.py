@@ -66,6 +66,25 @@ class Graph:
         ptr = _ggml.ggml_graph_get_tensor(self.ptr, name.encode())
         return Tensor(self.ctx, ptr) if ptr else None
 
+    # -- debugging ----------------------------------------------------------
+
+    def print(self) -> None:
+        """Print the graph's nodes to stderr (``ggml_graph_print``)."""
+        _ggml.ggml_graph_print(self.ptr)
+
+    def dump_dot(self, path: str, *, forward: Optional["Graph"] = None) -> None:
+        """Write this graph to ``path`` as Graphviz dot (``ggml_graph_dump_dot``).
+
+        ggml renders the graph passed as its first argument, which is this one.
+        ``forward`` is the corresponding forward graph, used only to highlight
+        nodes shared with it when dumping a gradient graph.
+        """
+        _ggml.ggml_graph_dump_dot(
+            self.ptr,
+            forward.ptr if forward is not None else None,
+            str(path).encode(),
+        )
+
     def __len__(self) -> int:
         return self.n_nodes
 
