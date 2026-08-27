@@ -40,8 +40,6 @@ from ggbond.ggml import (
     GAllocr,
     Tensor,
     F32,
-    graph_overhead_custom,
-    tensor_overhead,
 )
 
 NAM_MAX_NODES = 8192
@@ -258,7 +256,7 @@ def load_model(path: str, backend: Backend) -> NamModel:
     n_tensors = 0
     for m in metas:
         n_tensors += 1 + 5 * len(m["dilations"]) + 1 + (1 if m["head_bias"] else 0)
-    ctx_w = Context(mem_size=tensor_overhead() * (n_tensors + 16), no_alloc=True)
+    ctx_w = Context.for_tensors(n_tensors + 16)
     model.ctx_w = ctx_w
 
     for ai, m in enumerate(metas):
@@ -370,17 +368,12 @@ def build_graph(model: NamModel, ctx: Context, n_samples: int):
     return graph, inp, out
 
 
-def _graph_buf_size() -> int:
-    return (tensor_overhead() * NAM_MAX_NODES
-            + graph_overhead_custom(NAM_MAX_NODES, False))
-
-
 def run_offline(model: NamModel, backend: Backend, audio: np.ndarray) -> np.ndarray:
     pad = model.receptive_field - 1
     x = np.concatenate([np.zeros(pad, np.float32), audio.astype(np.float32)]) if pad > 0 else audio
     n = x.size
 
-    with Context(mem_size=_graph_buf_size(), no_alloc=True) as ctx:
+    with Context.for_tensors(0, graph_size=NAM_MAX_NODES) as ctx:
         graph, inp, out = build_graph(model, ctx, n)
         with GAllocr.from_backend(backend) as alloc:
             alloc.alloc_graph(graph)

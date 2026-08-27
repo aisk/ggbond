@@ -541,6 +541,45 @@ class Tensor:
         _ggml.ggml_backend_tensor_get(self.ptr, ptr, 0, self.nbytes)
         return out
 
+    def to_numpy(self) -> "np.ndarray":
+        """Download this tensor into a freshly allocated numpy array.
+
+        Shape is :attr:`shape` (numpy order) and dtype follows this tensor's.
+        Use :meth:`get` instead to reuse a buffer or to control the layout.
+        """
+        return self.get(np.empty(self.shape, dtype=dtype_to_numpy(self.dtype)))
+
+    # -- operators ----------------------------------------------------------
+    #
+    # Only the element-wise ops get operators. ``mul_mat`` deliberately has no
+    # ``@``: it takes its operands transposed relative to ``numpy.matmul``, and
+    # an infix spelling would invite exactly that confusion.
+
+    def __add__(self, other: "Tensor") -> "Tensor":
+        return self.add(other)
+
+    def __sub__(self, other: "Tensor") -> "Tensor":
+        return self.sub(other)
+
+    def __mul__(self, other) -> "Tensor":
+        """``a * b`` is element-wise multiply; ``a * 2.0`` is :meth:`scale`."""
+        if isinstance(other, (int, float)):
+            return self.scale(other)
+        return self.mul(other)
+
+    def __rmul__(self, other) -> "Tensor":
+        if isinstance(other, (int, float)):
+            return self.scale(other)
+        return NotImplemented
+
+    def __truediv__(self, other) -> "Tensor":
+        if isinstance(other, (int, float)):
+            return self.scale(1.0 / other)
+        return self.div(other)
+
+    def __neg__(self) -> "Tensor":
+        return self.neg()
+
     def __repr__(self) -> str:
         return f"<ggml.Tensor name={self.name!r} ne={self.ne} dtype={self.dtype.name}>"
 

@@ -52,7 +52,7 @@ def main():
             sched.graph_compute(graph)
             sched.synchronize()
 
-            result = tc.get(np.empty(tuple(reversed(tc.ne)), dtype=np.float32))
+            result = tc.to_numpy()
     finally:
         for backend in backends:
             backend.close()

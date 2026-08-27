@@ -212,7 +212,7 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
 
         # -- create the weight tensors (metadata only; no_alloc context) --
         n_tensors = 2 + 6 + 12 * n_layer
-        ctx_w = Context(mem_size=_ggml.ggml_tensor_overhead() * n_tensors, no_alloc=True)
+        ctx_w = Context.for_tensors(n_tensors)
         model.ctx_w = ctx_w
 
         tensors: dict[str, Tensor] = {}
@@ -267,7 +267,7 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
         # -- key + value memory (uses the *user* n_ctx) --
         n_mem = n_layer * n_ctx
         n_elements = n_embd * n_mem
-        ctx_kv = Context(mem_size=_ggml.ggml_tensor_overhead() * 2, no_alloc=True)
+        ctx_kv = Context.for_tensors(2)
         model.ctx_kv = ctx_kv
         model.memory_k = ctx_kv.new_tensor_1d(F32, n_elements, name="memory_k")
         model.memory_v = ctx_kv.new_tensor_1d(F32, n_elements, name="memory_v")
@@ -352,13 +352,6 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
 # ============================================================================
 # Graph
 # ============================================================================
-
-def _graph_buf_size() -> int:
-    return (
-        _ggml.ggml_tensor_overhead() * GPT2_MAX_NODES
-        + _ggml.ggml_graph_overhead_custom(GPT2_MAX_NODES, False)
-    )
-
 
 def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
     """Build the forward graph in ``ctx``. Returns (graph, embd, position, logits)."""
@@ -466,7 +459,7 @@ def gpt2_eval(model, backend, allocr, n_past, embd_inp) -> np.ndarray:
     """Run the transformer and return logits for the last token."""
     N = len(embd_inp)
     n_vocab = model.hparams.n_vocab
-    with Context(mem_size=_graph_buf_size(), no_alloc=True) as ctx:
+    with Context.for_tensors(0, graph_size=GPT2_MAX_NODES) as ctx:
         graph, embd, position, logits = gpt2_graph(model, ctx, n_past, N)
 
         allocr.alloc_graph(graph)
@@ -538,7 +531,7 @@ def main():
         allocr = GAllocr.from_backend(backend)
         n_tokens = min(model.hparams.n_ctx, args.n_batch)
         n_past_wc = model.hparams.n_ctx - n_tokens
-        with Context(mem_size=_graph_buf_size(), no_alloc=True) as wctx:
+        with Context.for_tensors(0, graph_size=GPT2_MAX_NODES) as wctx:
             gworst, *_ = gpt2_graph(model, wctx, n_past_wc, n_tokens)
             allocr.reserve(gworst)
         mem_mb = allocr.buffer_size(0) / (1024.0 * 1024.0)

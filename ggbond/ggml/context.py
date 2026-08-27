@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 from typing import Optional
 
 import ggml as _ggml
@@ -9,7 +10,7 @@ import ggml as _ggml
 from .errors import nonnull
 from .types import DType
 from .tensor import Tensor
-from .graph import Graph
+from .graph import Graph, graph_overhead_custom
 
 
 def tensor_overhead() -> int:
@@ -47,6 +48,35 @@ class Context:
         self.no_alloc = no_alloc
         self._owns = True
         self._closed = False
+
+    @classmethod
+    def for_tensors(
+        cls,
+        n_tensors: int,
+        *,
+        graph_size: Optional[int] = None,
+        grads: bool = False,
+        extra: int = 0,
+    ) -> "Context":
+        """Create a ``no_alloc`` context sized for ``n_tensors`` plus a graph.
+
+        Does the ``ggml_tensor_overhead() * n + ggml_graph_overhead_custom(...)``
+        arithmetic that every graph-building program otherwise repeats. Pass
+        ``graph_size`` to reserve a graph of that many nodes (``None`` reserves
+        none), and ``extra`` for any additional bytes you need.
+
+        Only for metadata: a context holding tensor *data* (``no_alloc=False``)
+        must be sized by the caller with :meth:`Context`.
+        """
+        if n_tensors < 0:
+            raise ValueError(f"n_tensors must be non-negative, got {n_tensors}")
+        mem_size = tensor_overhead() * n_tensors + extra
+        if graph_size is not None:
+            # A graph reserves metadata for its own nodes on top of the graph
+            # struct, so count those tensors too.
+            mem_size += tensor_overhead() * graph_size
+            mem_size += graph_overhead_custom(graph_size, grads)
+        return cls(mem_size, no_alloc=True)
 
     @classmethod
     def from_ptr(cls, ptr, *, no_alloc: bool = True, owns: bool = True) -> "Context":
@@ -87,6 +117,19 @@ class Context:
 
     def new_tensor_4d(self, dtype: "DType", ne0: int, ne1: int, ne2: int, ne3: int, *, name: Optional[str] = None) -> Tensor:
         return self._new_tensor(_ggml.ggml_new_tensor_4d(self.ptr, int(dtype), ne0, ne1, ne2, ne3), name)
+
+    def new_tensor(self, dtype: "DType", *ne: int, name: Optional[str] = None) -> Tensor:
+        """Create a tensor of up to four dimensions (``ggml_new_tensor``).
+
+        ``ne`` is in ggml order, so build one from a numpy array with
+        ``ctx.new_tensor(F32, *reversed(array.shape))``.
+        """
+        if not 1 <= len(ne) <= 4:
+            raise ValueError(f"a tensor has between 1 and 4 dimensions, got {len(ne)}")
+        dims = (ctypes.c_int64 * len(ne))(*(int(n) for n in ne))
+        return self._new_tensor(
+            _ggml.ggml_new_tensor(self.ptr, int(dtype), len(ne), dims), name
+        )
 
     # -- tensor lookup ------------------------------------------------------
     #
