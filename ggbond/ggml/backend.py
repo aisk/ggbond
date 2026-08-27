@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 import ggml as _ggml
 
 from .buffer import Buffer, BufferType
+from .device import Device
 from .errors import GGMLError, check_status, nonnull
 
 if TYPE_CHECKING:
@@ -87,6 +88,23 @@ class Backend:
         loaded backends (CUDA, Metal, ...) get registered.
         """
         _ggml.ggml_backend_load_all()
+
+    @staticmethod
+    def devices() -> "list[Device]":
+        """Every device in ggml's registry, in registry order.
+
+        Call :meth:`load_all` first so dynamically loaded backends appear. Use
+        this to report device names and memory, or to pick one explicitly with
+        :meth:`Device.init_backend`, rather than taking whatever
+        :meth:`init_best` returns.
+        """
+        return Device.all()
+
+    @property
+    def device(self) -> "Optional[Device]":
+        """The :class:`Device` this backend runs on, if ggml reports one."""
+        ptr = _ggml.ggml_backend_get_device(self.ptr)
+        return Device(ptr) if ptr else None
 
     @classmethod
     def init_best(cls) -> "Backend":
