@@ -75,6 +75,51 @@ class OperatorTests(unittest.TestCase):
             self.run_operator(lambda a, b: a / 4.0), self.left / 4
         )
 
+    def test_scalar_addition_and_subtraction_use_scale_bias(self):
+        np.testing.assert_allclose(
+            self.run_operator(lambda a, b: a + 1.5), self.left + 1.5
+        )
+        np.testing.assert_allclose(
+            self.run_operator(lambda a, b: 1.5 + a), self.left + 1.5
+        )
+        np.testing.assert_allclose(
+            self.run_operator(lambda a, b: a - 1.5), self.left - 1.5
+        )
+        np.testing.assert_allclose(
+            self.run_operator(lambda a, b: 1.5 - a), 1.5 - self.left
+        )
+
+    def test_power_maps_to_sqr_and_sqrt(self):
+        np.testing.assert_allclose(
+            self.run_operator(lambda a, b: a ** 2), self.left ** 2
+        )
+        np.testing.assert_allclose(
+            self.run_operator(lambda a, b: a ** 0.5), np.sqrt(self.left), rtol=1e-6
+        )
+
+    def test_transpose_property(self):
+        np.testing.assert_allclose(
+            self.run_operator(lambda a, b: a.T.cont()), self.left.T
+        )
+
+    def test_unsupported_operands_raise_type_error(self):
+        with Context(1 << 20, no_alloc=True) as ctx:
+            a = ctx.new_tensor_2d(F32, 3, 2)
+            with self.assertRaises(TypeError):
+                a + "x"
+            with self.assertRaises(TypeError):
+                2.0 / a
+            with self.assertRaises(ValueError):
+                a ** 3
+
+    def test_numpy_array_protocol(self):
+        with Backend.cpu_init() as backend, Context(1 << 20, no_alloc=True) as ctx:
+            a = ctx.new_tensor_2d(F32, 3, 2)
+            backend.alloc_ctx_tensors(ctx)
+            a.set(self.left)
+            np.testing.assert_array_equal(np.asarray(a), self.left)
+            self.assertEqual(np.asarray(a, dtype=np.float64).dtype, np.float64)
+
     def test_mul_mat_has_no_operator(self):
         # ggml's mul_mat takes its operands transposed relative to numpy, so it
         # deliberately stays a named method.

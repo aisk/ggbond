@@ -15,6 +15,7 @@ everything with extra arguments (scalars, optional tensors, dtypes). See
 from __future__ import annotations
 
 import ctypes
+import numbers
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -38,6 +39,10 @@ ROPE_TYPE_NORMAL = 0
 ROPE_TYPE_NEOX = _ggml.GGML_ROPE_TYPE_NEOX
 ROPE_TYPE_MROPE = _ggml.GGML_ROPE_TYPE_MROPE
 ROPE_TYPE_VISION = _ggml.GGML_ROPE_TYPE_VISION
+
+# Python scalars accepted by the arithmetic operators (bool and numpy scalars
+# included).
+_SCALAR = numbers.Real
 
 # Argument kinds understood by the op tables.
 _TENSOR = "tensor"  # required Tensor operand
@@ -130,6 +135,11 @@ _PARAM_OPS = {
         "ggml_scale",
         (("s", _FLOAT),),
         "Element-wise multiply by the scalar ``s``.",
+    ),
+    "scale_bias": (
+        "ggml_scale_bias",
+        (("s", _FLOAT), ("b", _FLOAT)),
+        "Element-wise ``self * s + b``.",
     ),
     "clamp": (
         "ggml_clamp",
@@ -551,34 +561,79 @@ class Tensor:
 
     # -- operators ----------------------------------------------------------
     #
-    # Only the element-wise ops get operators. ``mul_mat`` deliberately has no
-    # ``@``: it takes its operands transposed relative to ``numpy.matmul``, and
-    # an infix spelling would invite exactly that confusion.
+    # Each operator maps to exactly one ggml op; scalars go through ``scale`` /
+    # ``scale_bias``. Anything without a single matching op (``2.0 / t``, other
+    # exponents) is left unsupported rather than composed here. ``mul_mat``
+    # deliberately has no ``@``: it takes its operands transposed relative to
+    # ``numpy.matmul``, and an infix spelling would invite exactly that confusion.
 
-    def __add__(self, other: "Tensor") -> "Tensor":
-        return self.add(other)
+    def __add__(self, other) -> "Tensor":
+        """``a + b`` is element-wise add; ``a + 1.0`` is :meth:`scale_bias`."""
+        if isinstance(other, Tensor):
+            return self.add(other)
+        if isinstance(other, _SCALAR):
+            return self.scale_bias(1.0, other)
+        return NotImplemented
 
-    def __sub__(self, other: "Tensor") -> "Tensor":
-        return self.sub(other)
+    def __radd__(self, other) -> "Tensor":
+        if isinstance(other, _SCALAR):
+            return self.scale_bias(1.0, other)
+        return NotImplemented
+
+    def __sub__(self, other) -> "Tensor":
+        if isinstance(other, Tensor):
+            return self.sub(other)
+        if isinstance(other, _SCALAR):
+            return self.scale_bias(1.0, -other)
+        return NotImplemented
+
+    def __rsub__(self, other) -> "Tensor":
+        if isinstance(other, _SCALAR):
+            return self.scale_bias(-1.0, other)
+        return NotImplemented
 
     def __mul__(self, other) -> "Tensor":
         """``a * b`` is element-wise multiply; ``a * 2.0`` is :meth:`scale`."""
-        if isinstance(other, (int, float)):
+        if isinstance(other, Tensor):
+            return self.mul(other)
+        if isinstance(other, _SCALAR):
             return self.scale(other)
-        return self.mul(other)
+        return NotImplemented
 
     def __rmul__(self, other) -> "Tensor":
-        if isinstance(other, (int, float)):
+        if isinstance(other, _SCALAR):
             return self.scale(other)
         return NotImplemented
 
     def __truediv__(self, other) -> "Tensor":
-        if isinstance(other, (int, float)):
+        if isinstance(other, Tensor):
+            return self.div(other)
+        if isinstance(other, _SCALAR):
             return self.scale(1.0 / other)
-        return self.div(other)
+        return NotImplemented
+
+    def __pow__(self, exponent) -> "Tensor":
+        """``t ** 2`` is :meth:`sqr` and ``t ** 0.5`` is :meth:`sqrt`."""
+        if not isinstance(exponent, _SCALAR):
+            return NotImplemented
+        if exponent == 2:
+            return self.sqr()
+        if exponent == 0.5:
+            return self.sqrt()
+        raise ValueError(f"ggml has no op for t ** {exponent!r}; only 2 and 0.5 are supported")
 
     def __neg__(self) -> "Tensor":
         return self.neg()
+
+    @property
+    def T(self) -> "Tensor":
+        """Swap the first two ggml dimensions (:meth:`transpose`), as a view."""
+        return self.transpose()
+
+    def __array__(self, dtype=None, copy=None) -> "np.ndarray":
+        """Let ``np.asarray(t)`` download the tensor via :meth:`to_numpy`."""
+        out = self.to_numpy()
+        return out if dtype is None else out.astype(dtype, copy=False)
 
     def __repr__(self) -> str:
         return f"<ggml.Tensor name={self.name!r} ne={self.ne} dtype={self.dtype.name}>"
