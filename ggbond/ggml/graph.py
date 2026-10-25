@@ -29,6 +29,11 @@ class Graph:
 
     def __init__(self, ctx: "Context", *, size: Optional[int] = None, grads: bool = False):
         self.ctx = ctx
+        # ggml_new_graph_custom aborts when the graph does not fit the arena.
+        ctx._reserve(
+            graph_overhead_custom(size or _ggml.GGML_DEFAULT_GRAPH_SIZE, grads),
+            "new_graph",
+        )
         if size is None and not grads:
             ptr = _ggml.ggml_new_graph(ctx.ptr)
         else:

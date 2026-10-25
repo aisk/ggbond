@@ -7,10 +7,14 @@ from typing import Optional
 
 import ggml as _ggml
 
-from .errors import nonnull
+from .errors import GGMLError, nonnull
 from .types import DType
 from .tensor import Tensor
 from .graph import Graph, graph_overhead_custom
+
+
+# Alignment ggml pads every arena object to.
+_MEM_ALIGN = _ggml.GGML_MEM_ALIGN
 
 
 def tensor_overhead() -> int:
@@ -41,6 +45,7 @@ class Context:
     ):
         params = _ggml.ggml_init_params(mem_size, mem_buffer, no_alloc)
         self.ptr = nonnull(_ggml.ggml_init(params), "ggml_init")
+        self.mem_size = _ggml.ggml_get_mem_size(self.ptr)
         # ggml borrows external arena memory for the entire context lifetime.
         # Retain the object passed by the caller so ctypes-owned buffers are not
         # garbage-collected while the native context still points into them.
@@ -91,6 +96,7 @@ class Context:
         """
         self = cls.__new__(cls)
         self.ptr = nonnull(ptr, "ggml_context")
+        self.mem_size = _ggml.ggml_get_mem_size(self.ptr)
         self._mem_buffer = None
         self.no_alloc = no_alloc
         self._owns = owns
@@ -107,6 +113,39 @@ class Context:
         """
         self._buffers.append(buffer)
 
+    # -- arena accounting ---------------------------------------------------
+    #
+    # ggml aborts the process when an allocation does not fit the arena, so
+    # every object creation goes through one of these checks first.
+
+    @property
+    def used_mem(self) -> int:
+        """Bytes of the arena already in use (``ggml_used_mem``)."""
+        return _ggml.ggml_used_mem(self._live_ptr("used_mem"))
+
+    def _live_ptr(self, what: str):
+        if self.ptr is None:
+            raise GGMLError(f"{what}: the context is closed")
+        return self.ptr
+
+    def _reserve(self, nbytes: int, what: str) -> None:
+        used = _ggml.ggml_used_mem(self._live_ptr(what))
+        if used + nbytes > self.mem_size:
+            raise GGMLError(
+                f"{what}: context out of memory: needs {nbytes} bytes but only "
+                f"{self.mem_size - used} of {self.mem_size} are free; size it "
+                f"larger (Context.for_tensors or mem_size)"
+            )
+
+    def _reserve_new_tensor(self, dtype: "DType", ne) -> None:
+        nbytes = tensor_overhead()
+        if not self.no_alloc:
+            data = _ggml.ggml_row_size(int(dtype), ne[0])
+            for d in ne[1:]:
+                data *= d
+            nbytes += -(-data // _MEM_ALIGN) * _MEM_ALIGN
+        self._reserve(nbytes, "new_tensor")
+
     # -- tensor factories ---------------------------------------------------
     #
     # Dimensions are in **ggml order** ``(ne0, ne1, ...)`` -- the reverse of
@@ -119,15 +158,19 @@ class Context:
         return tensor
 
     def new_tensor_1d(self, dtype: "DType", ne0: int, *, name: Optional[str] = None) -> Tensor:
+        self._reserve_new_tensor(dtype, (ne0,))
         return self._new_tensor(_ggml.ggml_new_tensor_1d(self.ptr, int(dtype), ne0), name)
 
     def new_tensor_2d(self, dtype: "DType", ne0: int, ne1: int, *, name: Optional[str] = None) -> Tensor:
+        self._reserve_new_tensor(dtype, (ne0, ne1))
         return self._new_tensor(_ggml.ggml_new_tensor_2d(self.ptr, int(dtype), ne0, ne1), name)
 
     def new_tensor_3d(self, dtype: "DType", ne0: int, ne1: int, ne2: int, *, name: Optional[str] = None) -> Tensor:
+        self._reserve_new_tensor(dtype, (ne0, ne1, ne2))
         return self._new_tensor(_ggml.ggml_new_tensor_3d(self.ptr, int(dtype), ne0, ne1, ne2), name)
 
     def new_tensor_4d(self, dtype: "DType", ne0: int, ne1: int, ne2: int, ne3: int, *, name: Optional[str] = None) -> Tensor:
+        self._reserve_new_tensor(dtype, (ne0, ne1, ne2, ne3))
         return self._new_tensor(_ggml.ggml_new_tensor_4d(self.ptr, int(dtype), ne0, ne1, ne2, ne3), name)
 
     def new_tensor(self, dtype: "DType", *ne: int, name: Optional[str] = None) -> Tensor:
@@ -138,6 +181,7 @@ class Context:
         """
         if not 1 <= len(ne) <= 4:
             raise ValueError(f"a tensor has between 1 and 4 dimensions, got {len(ne)}")
+        self._reserve_new_tensor(dtype, ne)
         dims = (ctypes.c_int64 * len(ne))(*(int(n) for n in ne))
         return self._new_tensor(
             _ggml.ggml_new_tensor(self.ptr, int(dtype), len(ne), dims), name

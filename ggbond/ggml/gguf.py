@@ -142,28 +142,64 @@ class GGUF:
     def n_kv(self) -> int:
         return _ggml.gguf_get_n_kv(self.ptr)
 
+    # gguf validates indices and value types with GGML_ASSERT, which aborts the
+    # process; these checks raise first.
+
+    def _check_key(self, i: int, what: str, expected: Optional[int] = None) -> None:
+        n = self.n_kv
+        if not 0 <= i < n:
+            raise IndexError(f"{what}: key index {i} out of range for {n} keys")
+        if expected is not None:
+            actual = _ggml.gguf_get_kv_type(self.ptr, i)
+            if actual != expected:
+                raise GGMLError(
+                    f"{what}: key {self.get_key(i)!r} holds {type_name(actual)}, "
+                    f"not {type_name(expected)}"
+                )
+
+    def _check_tensor(self, i: int, what: str) -> None:
+        n = self.n_tensors
+        if not 0 <= i < n:
+            raise IndexError(f"{what}: tensor index {i} out of range for {n} tensors")
+
+    def _require_tensor_name(self, name: str, what: str) -> None:
+        if self.find_tensor(name) < 0:
+            raise KeyError(f"{what}: no tensor named {name!r}")
+
     def find_key(self, key: str) -> int:
         return _ggml.gguf_find_key(self.ptr, key.encode())
 
     def get_key(self, i: int) -> str:
+        self._check_key(i, "get_key")
         return _decode(_ggml.gguf_get_key(self.ptr, i))
 
     def get_kv_type(self, i: int) -> int:
+        self._check_key(i, "get_kv_type")
         return _ggml.gguf_get_kv_type(self.ptr, i)
 
     def get_val_str(self, i: int) -> str:
+        self._check_key(i, "get_val_str", TYPE_STRING)
         return _decode(_ggml.gguf_get_val_str(self.ptr, i))
 
     def set_val_str(self, key: str, value: str) -> None:
         _ggml.gguf_set_val_str(self.ptr, key.encode(), str(value).encode())
 
     def get_arr_type(self, i: int) -> int:
+        self._check_key(i, "get_arr_type", TYPE_ARRAY)
         return _ggml.gguf_get_arr_type(self.ptr, i)
 
     def get_arr_n(self, i: int) -> int:
+        self._check_key(i, "get_arr_n", TYPE_ARRAY)
         return _ggml.gguf_get_arr_n(self.ptr, i)
 
     def get_arr_str(self, i: int, j: int) -> str:
+        if self.get_arr_type(i) != TYPE_STRING:
+            raise GGMLError(
+                f"get_arr_str: key {self.get_key(i)!r} holds a numeric array; use get_arr_data"
+            )
+        n = _ggml.gguf_get_arr_n(self.ptr, i)
+        if not 0 <= j < n:
+            raise IndexError(f"get_arr_str: element {j} out of range for {n} elements")
         return _decode(_ggml.gguf_get_arr_str(self.ptr, i, j))
 
     def get_arr_data(self, i: int) -> "np.ndarray":
@@ -268,15 +304,19 @@ class GGUF:
         return _ggml.gguf_find_tensor(self.ptr, name.encode())
 
     def get_tensor_name(self, i: int) -> str:
+        self._check_tensor(i, "get_tensor_name")
         return _decode(_ggml.gguf_get_tensor_name(self.ptr, i))
 
     def get_tensor_offset(self, i: int) -> int:
+        self._check_tensor(i, "get_tensor_offset")
         return _ggml.gguf_get_tensor_offset(self.ptr, i)
 
     def get_tensor_size(self, i: int) -> int:
+        self._check_tensor(i, "get_tensor_size")
         return _ggml.gguf_get_tensor_size(self.ptr, i)
 
     def get_tensor_type(self, i: int) -> "DType":
+        self._check_tensor(i, "get_tensor_type")
         return DType(_ggml.gguf_get_tensor_type(self.ptr, i))
 
     def add_tensor(self, tensor: "Tensor") -> None:
@@ -286,6 +326,8 @@ class GGUF:
         tensor points, so it must stay alive and allocated until then. Use
         :meth:`set_tensor_data` to point an entry at a different buffer.
         """
+        if self.find_tensor(tensor.name) >= 0:
+            raise ValueError(f"add_tensor: duplicate tensor name {tensor.name!r}")
         _ggml.gguf_add_tensor(self.ptr, tensor.ptr)
 
     def set_tensor_data(self, name: str, data) -> None:
@@ -294,6 +336,7 @@ class GGUF:
         gguf only stores the pointer, so the copy is retained by this
         :class:`GGUF` until it is closed.
         """
+        self._require_tensor_name(name, "set_tensor_data")
         source = memoryview(data).cast("B")
         copy = (ctypes.c_char * source.nbytes).from_buffer_copy(source)
         self._retained.append(copy)
@@ -302,6 +345,7 @@ class GGUF:
         )
 
     def set_tensor_type(self, name: str, dtype: "DType") -> None:
+        self._require_tensor_name(name, "set_tensor_type")
         _ggml.gguf_set_tensor_type(self.ptr, name.encode(), int(dtype))
 
     # -- writing ------------------------------------------------------------
@@ -337,10 +381,12 @@ class GGUF:
         return f"GGUF(n_kv={self.n_kv}, n_tensors={self.n_tensors})"
 
 
-def _make_getter(suffix: str, coerce):
+def _make_getter(suffix: str, gguf_type: int, coerce):
     fn = getattr(_ggml, f"gguf_get_val_{suffix}")
+    what = f"get_val_{suffix}"
 
     def getter(self, i: int):
+        self._check_key(i, what, gguf_type)
         return coerce(fn(self.ptr, i))
 
     getter.__name__ = f"get_val_{suffix}"
@@ -362,7 +408,7 @@ def _make_setter(suffix: str, coerce):
 
 
 for _suffix, (_type, _coerce, _dtype) in _KV_TYPES.items():
-    setattr(GGUF, f"get_val_{_suffix}", _make_getter(_suffix, _coerce))
+    setattr(GGUF, f"get_val_{_suffix}", _make_getter(_suffix, _type, _coerce))
     setattr(GGUF, f"set_val_{_suffix}", _make_setter(_suffix, _coerce))
 
 del _suffix, _type, _coerce, _dtype

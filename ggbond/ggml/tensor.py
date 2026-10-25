@@ -23,7 +23,7 @@ import numpy as np
 import ggml as _ggml
 
 from .errors import GGMLError
-from .types import DType, F32, dtype_to_numpy
+from .types import DType, F32, I32, dtype_to_numpy
 
 if TYPE_CHECKING:
     from .context import Context
@@ -377,6 +377,110 @@ _PARAM_OPS = {
 }
 
 
+# -- preconditions --------------------------------------------------------------
+#
+# ggml validates op arguments with GGML_ASSERT, which aborts the whole process.
+# These mirror the asserts of the most commonly misused ops so that a bad shape
+# raises ValueError instead. Each check takes the op's arguments positionally.
+
+
+def _check_broadcast(name: str):
+    def check(self, other):
+        if not _ggml.ggml_can_repeat(other.ptr, self.ptr):
+            raise ValueError(
+                f"{name}: cannot broadcast other ne={other.ne4} onto ne={self.ne4}; "
+                f"every dimension of self must be a multiple of other's"
+            )
+    return check
+
+
+def _check_repeat(self, other):
+    if not _ggml.ggml_can_repeat(self.ptr, other.ptr):
+        raise ValueError(
+            f"repeat: cannot tile ne={self.ne4} up to ne={other.ne4}; every "
+            f"dimension of other must be a multiple of self's"
+        )
+
+
+def _check_mul_mat(self, other):
+    a, b = self.ne4, other.ne4
+    if a[0] != b[0] or 0 in a[2:] or b[2] % a[2] or b[3] % a[3]:
+        raise ValueError(
+            f"mul_mat: needs a.ne[0] == b.ne[0] and b.ne[2], b.ne[3] divisible by "
+            f"a.ne[2], a.ne[3]; got a.ne={a}, b.ne={b}"
+        )
+
+
+def _check_reshape(self, *ne):
+    if not _ggml.ggml_is_contiguous(self.ptr):
+        raise ValueError("reshape: the tensor is not contiguous; call cont() first")
+    n = 1
+    for d in ne:
+        n *= d
+    if n != self.nelements:
+        raise ValueError(
+            f"reshape: cannot reshape {self.nelements} elements (ne={self.ne}) to ne={ne}"
+        )
+
+
+def _check_cpy(self, other):
+    if self.nelements != other.nelements:
+        raise ValueError(
+            f"cpy: element counts differ: {self.nelements} (ne={self.ne}) vs "
+            f"{other.nelements} (ne={other.ne})"
+        )
+
+
+def _check_get_rows(self, other):
+    a, b = self.ne4, other.ne4
+    if other.dtype != I32:
+        raise ValueError(f"get_rows: row indices must be I32, got {other.dtype.name}")
+    if a[2] != b[1] or a[3] != b[2] or b[3] != 1:
+        raise ValueError(
+            f"get_rows: needs a.ne[2] == b.ne[1], a.ne[3] == b.ne[2] and b.ne[3] == 1; "
+            f"got a.ne={a}, b.ne={b}"
+        )
+
+
+def _check_concat(self, other, dim):
+    if not 0 <= dim < 4:
+        raise ValueError(f"concat: dim must be in [0, 4), got {dim}")
+    if self.dtype != other.dtype:
+        raise ValueError(
+            f"concat: dtypes differ: {self.dtype.name} vs {other.dtype.name}"
+        )
+    a, b = self.ne4, other.ne4
+    if any(a[d] != b[d] for d in range(4) if d != dim):
+        raise ValueError(
+            f"concat: shapes must match outside dim {dim}; got ne={a} and ne={b}"
+        )
+
+
+_CHECKS = {
+    "add": _check_broadcast("add"),
+    "sub": _check_broadcast("sub"),
+    "mul": _check_broadcast("mul"),
+    "div": _check_broadcast("div"),
+    "repeat": _check_repeat,
+    "mul_mat": _check_mul_mat,
+    "reshape_1d": _check_reshape,
+    "reshape_2d": _check_reshape,
+    "reshape_3d": _check_reshape,
+    "reshape_4d": _check_reshape,
+    "cpy": _check_cpy,
+    "get_rows": _check_get_rows,
+    "concat": _check_concat,
+}
+
+# Tensors an op creates in its context, for ops that create more than one (the
+# convolutions are composed of im2col, mul_mat and reshapes). Measured against
+# ggml_used_mem; every other op creates exactly one.
+_OP_TENSORS = {
+    "conv_1d": 5,
+    "conv_2d": 7,
+}
+
+
 class Tensor:
     """A ggml tensor bound to a :class:`Context`.
 
@@ -682,8 +786,11 @@ def _make_op(name: str, fn_name: str, params, doc: str):
     """
     signature = ["self"]
     call_args = ["ctx", "self.ptr"]
+    arg_names = []
     namespace = {"_fn": getattr(_ggml, fn_name), "Tensor": Tensor, "GGMLError": GGMLError,
-                 "DType": DType, "Optional": Optional}
+                 "DType": DType, "Optional": Optional,
+                 "_used_mem": _ggml.ggml_used_mem,
+                 "_need": _OP_TENSORS.get(name, 1) * _ggml.ggml_tensor_overhead()}
 
     for param in params:
         arg_name, kind = param[0], param[1]
@@ -695,13 +802,26 @@ def _make_op(name: str, fn_name: str, params, doc: str):
         else:
             signature.append(f"{arg_name}: {annotation}")
         call_args.append(_ARG_CONV[kind].format(arg_name))
+        arg_names.append(arg_name)
+
+    # The arena check covers tensor metadata only. Ops in a ``no_alloc=False``
+    # context also need room for their data, which is not known before the op
+    # runs, so there it is a lower bound.
+    check = ""
+    if name in _CHECKS:
+        namespace["_check"] = _CHECKS[name]
+        check = f"    _check({', '.join(['self'] + arg_names)})\n"
 
     source = (
         f"def {name}({', '.join(signature)}) -> Tensor:\n"
-        f"    ctx = self.ctx.ptr\n"
+        f"    target = self.ctx\n"
+        f"    ctx = target.ptr\n"
         f"    if ctx is None:\n"
         f"        raise GGMLError('{name}: the target context is closed')\n"
-        f"    return Tensor(self.ctx, _fn({', '.join(call_args)}))\n"
+        f"{check}"
+        f"    if _used_mem(ctx) + _need > target.mem_size:\n"
+        f"        target._reserve(_need, '{name}')\n"
+        f"    return Tensor(target, _fn({', '.join(call_args)}))\n"
     )
     exec(compile(source, f"<ggbond op {name}>", "exec"), namespace)
 
