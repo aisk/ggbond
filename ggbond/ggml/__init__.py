@@ -14,7 +14,7 @@ Typical CPU flow::
         be.set_n_threads(4)
         a = ctx.new_tensor_2d(F32, 3, 4, name="a")  # ggml order = reversed numpy shape
         b = ctx.new_tensor_2d(F32, 3, 2, name="b")
-        c = b.mul_mat(a)                             # numpy a @ b == b.mul_mat(a)
+        c = b.mul_mat(a)                             # numpy a @ b.T == b.mul_mat(a)
         be.alloc_ctx_tensors(ctx)
         a.set(np.random.rand(4, 3).astype(np.float32))  # upload via the tensor
         b.set(np.random.rand(2, 3).astype(np.float32))
@@ -22,7 +22,7 @@ Typical CPU flow::
         with GAllocr.from_backend(be) as alloc:
             alloc.alloc_graph(graph)
             be.compute(graph)
-        out = c.get(np.empty(tuple(reversed(c.ne)), dtype=np.float32))
+        out = c.to_numpy()
         print(out)
 """
 

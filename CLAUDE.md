@@ -77,13 +77,13 @@ with Backend.cpu_init() as be, \
         alloc.alloc_graph(graph)                               # allocate working memory
         be.compute(graph)
 
-    out = tc.get(np.empty(tuple(reversed(tc.ne)), dtype=np.float32))  # download into a numpy buffer
+    out = tc.to_numpy()                                        # download into a new numpy array
 ```
 
 ### Shape convention (frequent source of bugs)
 - `Tensor.ne` is **GGML order** `(ne0, ne1, …)` — column-major-ish, the reverse of numpy.
 - `new_tensor_Nd` / `reshape_Nd` take dims in **GGML order**, so construct from a numpy array with `*reversed(arr.shape)`.
-- To read a result back, allocate the output array with `np.empty(tuple(reversed(tensor.ne)), …)`.
+- To read a result back, `tensor.to_numpy()` allocates an array of `tensor.shape` (`ne` reversed). Use `tensor.get(out)` with a pre-allocated array of that shape to reuse a buffer.
 - `a.mul_mat(b)` requires `a.ne[0] == b.ne[0]` (shared inner dim) and yields `ne = (a.ne[1], b.ne[1])`. For NumPy arrays with matching column counts, `ta.mul_mat(tb)` computes `b @ a.T`. To compute a conventional `left @ right`, store `right.T` as the first GGML operand and `left` as the second.
 
 ### Lifecycle rules

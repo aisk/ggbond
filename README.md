@@ -47,9 +47,7 @@ with Backend.cpu_init() as backend, Context(1 << 20, no_alloc=True) as ctx:
         tb.set(b)
         backend.compute(graph)
 
-        result = out.get(
-            np.empty(tuple(reversed(out.ne)), dtype=np.float32)
-        )
+        result = out.to_numpy()
 
 np.testing.assert_allclose(result, b @ a.T)
 ```
