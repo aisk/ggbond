@@ -21,7 +21,7 @@ Typical CPU flow::
         graph = ctx.new_graph().build_forward_expand(c)
         with GAllocr.from_backend(be) as alloc:
             alloc.alloc_graph(graph)
-            be.compute(graph); be.synchronize()
+            be.compute(graph)
         out = c.get(np.empty(tuple(reversed(c.ne)), dtype=np.float32))
         print(out)
 """

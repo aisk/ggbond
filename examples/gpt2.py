@@ -468,7 +468,6 @@ def gpt2_eval(model, backend, allocr, n_past, embd_inp) -> np.ndarray:
         position.set(np.arange(n_past, n_past + N, dtype=np.int32))
 
         backend.compute(graph)
-        backend.synchronize()
 
         # logits hold [n_vocab, N] row-major (n_vocab fastest); return just the
         # last token's row, mirroring the C++ which reads that slice directly.

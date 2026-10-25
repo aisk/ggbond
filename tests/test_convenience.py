@@ -17,7 +17,6 @@ def evaluate(build):
         with GAllocr.from_backend(backend) as allocator:
             allocator.alloc_graph(graph)
             backend.compute(graph)
-            backend.synchronize()
             return output.to_numpy()
 
 

@@ -379,7 +379,6 @@ def run_offline(model: NamModel, backend: Backend, audio: np.ndarray) -> np.ndar
             alloc.alloc_graph(graph)
             inp.set(x.reshape(n, 1))
             backend.compute(graph)
-            backend.synchronize()
             y = out.get(np.empty(out.nelements, dtype=np.float32))
 
     if y.size != audio.size:  # guard against off-by-one padding

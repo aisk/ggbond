@@ -49,8 +49,7 @@ def main():
             ta.set(a)
             tb.set(b)
 
-            sched.graph_compute(graph)
-            sched.synchronize()
+            sched.compute(graph)
 
             result = tc.to_numpy()
     finally:

@@ -32,7 +32,6 @@ class ContextRefTests(unittest.TestCase):
                 with GAllocr.from_backend(backend) as allocator:
                     allocator.alloc_graph(graph)
                     backend.compute(graph)
-                    backend.synchronize()
                     # doubled lives in the allocator's buffer, so read it here.
                     result = doubled.get(np.empty(doubled.shape, dtype=np.float32))
 

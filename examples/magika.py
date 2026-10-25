@@ -139,7 +139,6 @@ class Magika:
                 alloc.alloc_graph(graph)
                 inp.set(input_data.reshape(n_files, self.INP_BYTES, 257))
                 self._backend.compute(graph)
-                self._backend.synchronize()
                 all_probs = out.get(
                     np.empty(tuple(reversed(out.ne)), dtype=np.float32)
                 ).reshape(n_files, self.N_LABEL)

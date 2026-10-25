@@ -93,11 +93,16 @@ class Scheduler:
 
     # -- compute ------------------------------------------------------------
 
-    def graph_compute(self, graph: "Graph") -> None:
+    def compute(self, graph: "Graph") -> None:
+        """Compute ``graph`` and wait for it (``ggml_backend_sched_graph_compute``).
+
+        ggml synchronizes before returning, so results can be read right away.
+        """
         status = _ggml.ggml_backend_sched_graph_compute(self.ptr, graph.ptr)
         check_status(status, "ggml_backend_sched_graph_compute")
 
-    def graph_compute_async(self, graph: "Graph") -> None:
+    def compute_async(self, graph: "Graph") -> None:
+        """Start computing ``graph``; call :meth:`synchronize` before reading results."""
         status = _ggml.ggml_backend_sched_graph_compute_async(self.ptr, graph.ptr)
         check_status(status, "ggml_backend_sched_graph_compute_async")
 

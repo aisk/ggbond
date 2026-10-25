@@ -46,7 +46,6 @@ with Backend.cpu_init() as backend, Context(1 << 20, no_alloc=True) as ctx:
         ta.set(a)
         tb.set(b)
         backend.compute(graph)
-        backend.synchronize()
 
         result = out.get(
             np.empty(tuple(reversed(out.ne)), dtype=np.float32)

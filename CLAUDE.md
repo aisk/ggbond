@@ -73,7 +73,7 @@ with Backend.cpu_init() as be, \
     graph = ctx.new_graph().build_forward_expand(tc)
     with GAllocr.from_backend(be) as alloc:
         alloc.alloc_graph(graph)                               # allocate working memory
-        be.compute(graph); be.synchronize()
+        be.compute(graph)
 
     out = tc.get(np.empty(tuple(reversed(tc.ne)), dtype=np.float32))  # download into a numpy buffer
 ```
