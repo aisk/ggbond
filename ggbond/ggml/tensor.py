@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ctypes
 import numbers
+from enum import IntEnum
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -28,18 +29,51 @@ from .types import DType, F32, I32, dtype_to_numpy
 if TYPE_CHECKING:
     from .context import Context
 
-# Pooling ops for :meth:`Tensor.pool_1d` / :meth:`Tensor.pool_2d`
-# (mirror ggml's ``enum ggml_op_pool``).
-POOL_MAX = _ggml.GGML_OP_POOL_MAX
-POOL_AVG = _ggml.GGML_OP_POOL_AVG
 
-# Rope modes for :meth:`Tensor.rope` / :meth:`Tensor.rope_ext`. Mode 0 is the
-# original interleaved GPT-NeoX-free layout; the rest mirror ggml's
-# ``GGML_ROPE_TYPE_*``.
-ROPE_TYPE_NORMAL = 0
-ROPE_TYPE_NEOX = _ggml.GGML_ROPE_TYPE_NEOX
-ROPE_TYPE_MROPE = _ggml.GGML_ROPE_TYPE_MROPE
-ROPE_TYPE_VISION = _ggml.GGML_ROPE_TYPE_VISION
+
+class PoolOp(IntEnum):
+    """Pooling op for :meth:`Tensor.pool_1d` / :meth:`Tensor.pool_2d`
+    (``enum ggml_op_pool``)."""
+
+    MAX = _ggml.GGML_OP_POOL_MAX
+    AVG = _ggml.GGML_OP_POOL_AVG
+
+
+class RopeType(IntEnum):
+    """Rope mode for :meth:`Tensor.rope` / :meth:`Tensor.rope_ext`
+    (``GGML_ROPE_TYPE_*``)."""
+
+    NORMAL = _ggml.GGML_ROPE_TYPE_NORMAL
+    NEOX = _ggml.GGML_ROPE_TYPE_NEOX
+    MROPE = _ggml.GGML_ROPE_TYPE_MROPE
+    VISION = _ggml.GGML_ROPE_TYPE_VISION
+    IMROPE = _ggml.GGML_ROPE_TYPE_IMROPE
+
+
+# The operation that produced a tensor (``enum ggml_op``), as reported by
+# :attr:`Tensor.op`. Built from the bindings since it has ~100 members; the
+# ``GGML_OP_POOL_MAX``/``AVG``/``COUNT`` constants belong to ``ggml_op_pool``.
+_NOT_OPS = {"GGML_OP_COUNT", "GGML_OP_POOL_MAX", "GGML_OP_POOL_AVG", "GGML_OP_POOL_COUNT"}
+Op = IntEnum(
+    "Op",
+    sorted(
+        ((name[len("GGML_OP_"):], getattr(_ggml, name))
+         for name in dir(_ggml)
+         if name.startswith("GGML_OP_") and name not in _NOT_OPS),
+        key=lambda item: item[1],
+    ),
+    module=__name__,
+)
+Op.__doc__ = "The ggml operation that produced a tensor (``enum ggml_op``)."
+
+# Module-level aliases, like ``F32`` for ``DType.F32``.
+POOL_MAX = PoolOp.MAX
+POOL_AVG = PoolOp.AVG
+ROPE_TYPE_NORMAL = RopeType.NORMAL
+ROPE_TYPE_NEOX = RopeType.NEOX
+ROPE_TYPE_MROPE = RopeType.MROPE
+ROPE_TYPE_VISION = RopeType.VISION
+ROPE_TYPE_IMROPE = RopeType.IMROPE
 
 # Python scalars accepted by the arithmetic operators (bool and numpy scalars
 # included).
@@ -52,6 +86,8 @@ _INT = "int"
 _FLOAT = "float"
 _BOOL = "bool"
 _DTYPE = "dtype"
+_POOL_OP = "pool_op"
+_ROPE_TYPE = "rope_type"
 
 # How each kind is converted to the ctypes argument, and how it is annotated.
 _ARG_CONV = {
@@ -61,6 +97,8 @@ _ARG_CONV = {
     _FLOAT: "float({0})",
     _BOOL: "bool({0})",
     _DTYPE: "int({0})",
+    _POOL_OP: "int({0})",
+    _ROPE_TYPE: "int({0})",
 }
 
 _ARG_ANNOTATION = {
@@ -70,6 +108,8 @@ _ARG_ANNOTATION = {
     _FLOAT: "float",
     _BOOL: "bool",
     _DTYPE: "DType",
+    _POOL_OP: "PoolOp",
+    _ROPE_TYPE: "RopeType",
 }
 
 # Ops taking only the receiver: name -> ggml function name.
@@ -196,10 +236,10 @@ _PARAM_OPS = {
     ),
     "rope": (
         "ggml_rope",
-        (("positions", _TENSOR), ("n_dims", _INT), ("mode", _INT)),
+        (("positions", _TENSOR), ("n_dims", _INT), ("mode", _ROPE_TYPE)),
         "Rotary position embedding over the first ``n_dims`` dimensions.\n\n"
         "``positions`` is an I32 tensor of token positions, one per sequence\n"
-        "element. ``mode`` is a ``ROPE_TYPE_*`` constant.",
+        "element. ``mode`` is a :class:`RopeType`.",
     ),
     "rope_ext": (
         "ggml_rope_ext",
@@ -207,7 +247,7 @@ _PARAM_OPS = {
             ("positions", _TENSOR),
             ("freq_factors", _TENSOR_OPT),
             ("n_dims", _INT),
-            ("mode", _INT),
+            ("mode", _ROPE_TYPE),
             ("n_ctx_orig", _INT),
             ("freq_base", _FLOAT, 10000.0),
             ("freq_scale", _FLOAT, 1.0),
@@ -357,14 +397,14 @@ _PARAM_OPS = {
     ),
     "pool_1d": (
         "ggml_pool_1d",
-        (("op", _INT), ("k0", _INT), ("s0", _INT), ("p0", _INT)),
+        (("op", _POOL_OP), ("k0", _INT), ("s0", _INT), ("p0", _INT)),
         "1D pooling: kernel ``k0``, stride ``s0``, padding ``p0``.\n\n"
-        "``op`` is a ggml pooling op (:data:`POOL_MAX` / :data:`POOL_AVG`).",
+        "``op`` is a :class:`PoolOp` (``PoolOp.MAX`` / ``PoolOp.AVG``).",
     ),
     "pool_2d": (
         "ggml_pool_2d",
         (
-            ("op", _INT),
+            ("op", _POOL_OP),
             ("k0", _INT),
             ("k1", _INT),
             ("s0", _INT),
@@ -372,7 +412,7 @@ _PARAM_OPS = {
             ("p0", _FLOAT),
             ("p1", _FLOAT),
         ),
-        "2D pooling. ``op`` is :data:`POOL_MAX` or :data:`POOL_AVG`.",
+        "2D pooling. ``op`` is a :class:`PoolOp`.",
     ),
 }
 
@@ -586,8 +626,9 @@ class Tensor:
         return _ggml.ggml_element_size(self.ptr)
 
     @property
-    def op(self) -> int:
-        return self.ptr.contents.op
+    def op(self) -> "Op":
+        """The ggml operation that produced this tensor (``Op.NONE`` for leaves)."""
+        return Op(self.ptr.contents.op)
 
     @property
     def name(self) -> str:
@@ -788,7 +829,8 @@ def _make_op(name: str, fn_name: str, params, doc: str):
     call_args = ["ctx", "self.ptr"]
     arg_names = []
     namespace = {"_fn": getattr(_ggml, fn_name), "Tensor": Tensor, "GGMLError": GGMLError,
-                 "DType": DType, "Optional": Optional,
+                 "DType": DType, "PoolOp": PoolOp, "RopeType": RopeType,
+                 "Optional": Optional,
                  "_used_mem": _ggml.ggml_used_mem,
                  "_need": _OP_TENSORS.get(name, 1) * _ggml.ggml_tensor_overhead()}
 

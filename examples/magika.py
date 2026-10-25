@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ggbond.ggml import Backend, Context, GAllocr, GGUF, F32, POOL_MAX
+from ggbond.ggml import Backend, Context, GAllocr, GGUF, F32, PoolOp
 
 
 MAGIKA_LABELS = [
@@ -125,7 +125,7 @@ class Magika:
             cur = w["dense_2/kernel:0"].mul_mat(cur).add(w["dense_2/bias:0"]).gelu()
 
             # global_max_pooling1d
-            cur = cur.transpose().cont().pool_1d(POOL_MAX, 384, 384, 0).reshape_2d(256, n_files)
+            cur = cur.transpose().cont().pool_1d(PoolOp.MAX, 384, 384, 0).reshape_2d(256, n_files)
 
             # layer normalization 1
             cur = cur.norm(eps=self.F_NORM_EPS).mul(w["layer_normalization_1/gamma:0"]).add(w["layer_normalization_1/beta:0"])

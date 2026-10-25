@@ -14,6 +14,7 @@ when you do not want to write the switch yourself.
 from __future__ import annotations
 
 import ctypes
+from enum import IntEnum
 from typing import Optional, Union
 
 import numpy as np
@@ -25,20 +26,40 @@ from .context import Context
 from .tensor import Tensor
 from .types import DType
 
-# GGUF metadata value types (mirror ggml's ``enum gguf_type``).
-TYPE_UINT8 = _ggml.GGUF_TYPE_UINT8
-TYPE_INT8 = _ggml.GGUF_TYPE_INT8
-TYPE_UINT16 = _ggml.GGUF_TYPE_UINT16
-TYPE_INT16 = _ggml.GGUF_TYPE_INT16
-TYPE_UINT32 = _ggml.GGUF_TYPE_UINT32
-TYPE_INT32 = _ggml.GGUF_TYPE_INT32
-TYPE_FLOAT32 = _ggml.GGUF_TYPE_FLOAT32
-TYPE_BOOL = _ggml.GGUF_TYPE_BOOL
-TYPE_STRING = _ggml.GGUF_TYPE_STRING
-TYPE_ARRAY = _ggml.GGUF_TYPE_ARRAY
-TYPE_UINT64 = _ggml.GGUF_TYPE_UINT64
-TYPE_INT64 = _ggml.GGUF_TYPE_INT64
-TYPE_FLOAT64 = _ggml.GGUF_TYPE_FLOAT64
+
+
+class GGUFType(IntEnum):
+    """GGUF metadata value type (``enum gguf_type``)."""
+
+    UINT8 = _ggml.GGUF_TYPE_UINT8
+    INT8 = _ggml.GGUF_TYPE_INT8
+    UINT16 = _ggml.GGUF_TYPE_UINT16
+    INT16 = _ggml.GGUF_TYPE_INT16
+    UINT32 = _ggml.GGUF_TYPE_UINT32
+    INT32 = _ggml.GGUF_TYPE_INT32
+    FLOAT32 = _ggml.GGUF_TYPE_FLOAT32
+    BOOL = _ggml.GGUF_TYPE_BOOL
+    STRING = _ggml.GGUF_TYPE_STRING
+    ARRAY = _ggml.GGUF_TYPE_ARRAY
+    UINT64 = _ggml.GGUF_TYPE_UINT64
+    INT64 = _ggml.GGUF_TYPE_INT64
+    FLOAT64 = _ggml.GGUF_TYPE_FLOAT64
+
+
+# Module-level aliases, like ``F32`` for ``DType.F32``.
+TYPE_UINT8 = GGUFType.UINT8
+TYPE_INT8 = GGUFType.INT8
+TYPE_UINT16 = GGUFType.UINT16
+TYPE_INT16 = GGUFType.INT16
+TYPE_UINT32 = GGUFType.UINT32
+TYPE_INT32 = GGUFType.INT32
+TYPE_FLOAT32 = GGUFType.FLOAT32
+TYPE_BOOL = GGUFType.BOOL
+TYPE_STRING = GGUFType.STRING
+TYPE_ARRAY = GGUFType.ARRAY
+TYPE_UINT64 = GGUFType.UINT64
+TYPE_INT64 = GGUFType.INT64
+TYPE_FLOAT64 = GGUFType.FLOAT64
 
 # suffix -> (gguf type, python coercion, numpy dtype for arrays of this type).
 # ``str`` and ``bool`` need their own conversions and are handled explicitly.
@@ -68,7 +89,7 @@ def _decode(value) -> str:
     return value.decode() if isinstance(value, bytes) else value
 
 
-def type_name(gguf_type: int) -> str:
+def type_name(gguf_type: GGUFType) -> str:
     """Return ggml's name for a gguf value type (``gguf_type_name``)."""
     return _decode(_ggml.gguf_type_name(int(gguf_type)))
 
@@ -145,7 +166,7 @@ class GGUF:
     # gguf validates indices and value types with GGML_ASSERT, which aborts the
     # process; these checks raise first.
 
-    def _check_key(self, i: int, what: str, expected: Optional[int] = None) -> None:
+    def _check_key(self, i: int, what: str, expected: Optional[GGUFType] = None) -> None:
         n = self.n_kv
         if not 0 <= i < n:
             raise IndexError(f"{what}: key index {i} out of range for {n} keys")
@@ -173,9 +194,9 @@ class GGUF:
         self._check_key(i, "get_key")
         return _decode(_ggml.gguf_get_key(self.ptr, i))
 
-    def get_kv_type(self, i: int) -> int:
+    def get_kv_type(self, i: int) -> GGUFType:
         self._check_key(i, "get_kv_type")
-        return _ggml.gguf_get_kv_type(self.ptr, i)
+        return GGUFType(_ggml.gguf_get_kv_type(self.ptr, i))
 
     def get_val_str(self, i: int) -> str:
         self._check_key(i, "get_val_str", TYPE_STRING)
@@ -184,9 +205,9 @@ class GGUF:
     def set_val_str(self, key: str, value: str) -> None:
         _ggml.gguf_set_val_str(self.ptr, key.encode(), str(value).encode())
 
-    def get_arr_type(self, i: int) -> int:
+    def get_arr_type(self, i: int) -> GGUFType:
         self._check_key(i, "get_arr_type", TYPE_ARRAY)
-        return _ggml.gguf_get_arr_type(self.ptr, i)
+        return GGUFType(_ggml.gguf_get_arr_type(self.ptr, i))
 
     def get_arr_n(self, i: int) -> int:
         self._check_key(i, "get_arr_n", TYPE_ARRAY)
@@ -226,7 +247,7 @@ class GGUF:
         values = np.frombuffer(buffer, dtype=dtype, count=n).copy()
         return values.astype(np.bool_) if element_type == TYPE_BOOL else values
 
-    def set_arr_data(self, key: str, gguf_type: int, values) -> None:
+    def set_arr_data(self, key: str, gguf_type: GGUFType, values) -> None:
         """Store ``values`` as an array of ``gguf_type`` under ``key``."""
         try:
             dtype = np.dtype(_TYPE_NUMPY[gguf_type])

@@ -32,21 +32,25 @@ from .errors import GGMLError
 from .types import DType, dtype_from_numpy, dtype_to_numpy, F32, F16, I8, I16, I32, I64, F64, BF16
 from .tensor import (
     Tensor,
+    Op,
+    PoolOp,
     POOL_MAX,
     POOL_AVG,
+    RopeType,
     ROPE_TYPE_NORMAL,
     ROPE_TYPE_NEOX,
     ROPE_TYPE_MROPE,
     ROPE_TYPE_VISION,
+    ROPE_TYPE_IMROPE,
 )
 from .context import Context, tensor_overhead
 from .graph import Graph, graph_overhead_custom
 from .gallocr import GAllocr
 from .buffer import Buffer, BufferType
-from .device import Device
-from .backend import Backend, DEVICE_CPU, DEVICE_GPU, DEVICE_IGPU, DEVICE_ACCEL
+from .device import Device, DeviceType
+from .backend import Backend, DEVICE_CPU, DEVICE_GPU, DEVICE_IGPU, DEVICE_ACCEL, DEVICE_META
 from .scheduler import Scheduler
-from .gguf import GGUF
+from .gguf import GGUF, GGUFType
 
 __all__ = [
     "GGMLError",
@@ -55,8 +59,11 @@ __all__ = [
     "dtype_to_numpy",
     "F32", "F16", "I8", "I16", "I32", "I64", "F64", "BF16",
     "Tensor",
-    "POOL_MAX", "POOL_AVG",
+    "Op",
+    "PoolOp", "POOL_MAX", "POOL_AVG",
+    "RopeType",
     "ROPE_TYPE_NORMAL", "ROPE_TYPE_NEOX", "ROPE_TYPE_MROPE", "ROPE_TYPE_VISION",
+    "ROPE_TYPE_IMROPE",
     "Context",
     "tensor_overhead",
     "Graph",
@@ -65,8 +72,10 @@ __all__ = [
     "Buffer",
     "BufferType",
     "Device",
+    "DeviceType",
     "Backend",
-    "DEVICE_CPU", "DEVICE_GPU", "DEVICE_IGPU", "DEVICE_ACCEL",
+    "DEVICE_CPU", "DEVICE_GPU", "DEVICE_IGPU", "DEVICE_ACCEL", "DEVICE_META",
     "Scheduler",
     "GGUF",
+    "GGUFType",
 ]

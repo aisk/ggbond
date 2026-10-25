@@ -9,12 +9,23 @@ enumerating so dynamically loaded backends are registered.
 from __future__ import annotations
 
 import ctypes
+from enum import IntEnum
 from typing import Optional
 
 import ggml as _ggml
 
 from .buffer import BufferType
 from .errors import nonnull
+
+
+class DeviceType(IntEnum):
+    """Kind of device in the registry (``enum ggml_backend_dev_type``)."""
+
+    CPU = _ggml.GGML_BACKEND_DEVICE_TYPE_CPU
+    GPU = _ggml.GGML_BACKEND_DEVICE_TYPE_GPU
+    IGPU = _ggml.GGML_BACKEND_DEVICE_TYPE_IGPU
+    ACCEL = _ggml.GGML_BACKEND_DEVICE_TYPE_ACCEL
+    META = _ggml.GGML_BACKEND_DEVICE_TYPE_META
 
 
 class Device:
@@ -50,8 +61,8 @@ class Device:
         return cls(ptr) if ptr else None
 
     @classmethod
-    def by_type(cls, dev_type: int) -> "Optional[Device]":
-        """Return the first device of ``dev_type`` (a ``DEVICE_*`` constant)."""
+    def by_type(cls, dev_type: DeviceType) -> "Optional[Device]":
+        """Return the first device of ``dev_type``."""
         ptr = _ggml.ggml_backend_dev_by_type(int(dev_type))
         return cls(ptr) if ptr else None
 
@@ -66,9 +77,8 @@ class Device:
         return _ggml.ggml_backend_dev_description(self.ptr).decode()
 
     @property
-    def type(self) -> int:
-        """One of the ``DEVICE_CPU`` / ``DEVICE_GPU`` / ... constants."""
-        return _ggml.ggml_backend_dev_type(self.ptr)
+    def type(self) -> DeviceType:
+        return DeviceType(_ggml.ggml_backend_dev_type(self.ptr))
 
     def memory(self) -> "tuple[int, int]":
         """Return ``(free, total)`` bytes of device memory."""
@@ -92,4 +102,4 @@ class Device:
         )
 
     def __repr__(self) -> str:
-        return f"<ggml.Device name={self.name!r} type={self.type}>"
+        return f"<ggml.Device name={self.name!r} type={self.type.name}>"

@@ -8,7 +8,7 @@ CPU backend. The scheduler allocates the graph's tensors itself
 
 import numpy as np
 
-from ggbond.ggml import Backend, Context, Scheduler, DEVICE_CPU, F32
+from ggbond.ggml import Backend, Context, DeviceType, Scheduler, F32
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
     # Like ggml's init_model: register all backends, then schedule over the best
     # device plus an explicit CPU backend.
     Backend.load_all()
-    cpu = Backend.init_by_type(DEVICE_CPU)
+    cpu = Backend.init_by_type(DeviceType.CPU)
     cpu.set_n_threads(4)
     backends = [Backend.init_best(), cpu]
 

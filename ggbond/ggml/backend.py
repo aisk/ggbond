@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional
 import ggml as _ggml
 
 from .buffer import Buffer, BufferType
-from .device import Device
+from .device import Device, DeviceType
 from .errors import GGMLError, check_status, nonnull
 
 if TYPE_CHECKING:
@@ -15,12 +15,12 @@ if TYPE_CHECKING:
     from .graph import Graph
 
 
-# Device types for :meth:`Backend.init_by_type` (mirror ggml's
-# ``enum ggml_backend_dev_type`` -- values never drift).
-DEVICE_CPU = _ggml.GGML_BACKEND_DEVICE_TYPE_CPU
-DEVICE_GPU = _ggml.GGML_BACKEND_DEVICE_TYPE_GPU
-DEVICE_IGPU = _ggml.GGML_BACKEND_DEVICE_TYPE_IGPU
-DEVICE_ACCEL = _ggml.GGML_BACKEND_DEVICE_TYPE_ACCEL
+# Module-level aliases for :class:`DeviceType`, like ``F32`` for ``DType.F32``.
+DEVICE_CPU = DeviceType.CPU
+DEVICE_GPU = DeviceType.GPU
+DEVICE_IGPU = DeviceType.IGPU
+DEVICE_ACCEL = DeviceType.ACCEL
+DEVICE_META = DeviceType.META
 
 
 class Backend:
@@ -112,14 +112,11 @@ class Backend:
         return cls(_ggml.ggml_backend_init_best(), kind="best")
 
     @classmethod
-    def init_by_type(cls, dev_type: int, *, params: Optional[bytes] = None) -> "Backend":
-        """Initialize the first device of ``dev_type`` (``ggml_backend_init_by_type``).
-
-        ``dev_type`` is one of :data:`DEVICE_CPU`, :data:`DEVICE_GPU`,
-        :data:`DEVICE_IGPU`, :data:`DEVICE_ACCEL`.
-        """
-        return cls(_ggml.ggml_backend_init_by_type(dev_type, params),
-                   kind=f"type:{int(dev_type)}")
+    def init_by_type(cls, dev_type: DeviceType, *, params: Optional[bytes] = None) -> "Backend":
+        """Initialize the first device of ``dev_type`` (``ggml_backend_init_by_type``)."""
+        dev_type = DeviceType(dev_type)
+        return cls(_ggml.ggml_backend_init_by_type(int(dev_type), params),
+                   kind=dev_type.name.lower())
 
     # -- queries ------------------------------------------------------------
 
