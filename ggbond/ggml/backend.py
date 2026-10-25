@@ -148,6 +148,8 @@ class Backend:
 
         The returned :class:`Buffer` is owned by this backend and freed on
         :meth:`close`; call :meth:`Buffer.release` to manage it yourself.
+        ``ctx`` retains the buffer, which retains this backend, so neither is
+        garbage-collected while the context is alive.
         """
         buffer = Buffer(
             nonnull(
@@ -157,6 +159,7 @@ class Backend:
             owner=self,
         )
         self._buffers.append(buffer)
+        ctx.retain_buffer(buffer)
         return buffer
 
     def disown_buffer(self, buffer: "Buffer") -> None:

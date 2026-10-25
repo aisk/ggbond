@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Optional
 
 import ggml as _ggml
 
-from .errors import check_status, nonnull
+from .errors import GGMLError, check_status, nonnull
 from .tensor import Tensor
 
 if TYPE_CHECKING:
@@ -35,7 +35,14 @@ class Graph:
             ptr = _ggml.ggml_new_graph_custom(
                 ctx.ptr, size or _ggml.GGML_DEFAULT_GRAPH_SIZE, grads
             )
-        self.ptr = nonnull(ptr, "ggml_new_graph")
+        self._ptr = nonnull(ptr, "ggml_new_graph")
+
+    @property
+    def ptr(self):
+        """The ``ggml_cgraph *``, or :class:`GGMLError` once its context is closed."""
+        if self.ctx.ptr is None:
+            raise GGMLError("graph used after its context was closed")
+        return self._ptr
 
     def build_forward_expand(self, tensor: Tensor) -> "Graph":
         """Add ``tensor`` (and its dependencies) to the forward graph."""

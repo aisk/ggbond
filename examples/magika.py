@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ggbond.ggml import Backend, Context, GAllocr, GGUF, Tensor, F32, POOL_MAX
+from ggbond.ggml import Backend, Context, GAllocr, GGUF, F32, POOL_MAX
 
 
 MAGIKA_LABELS = [
@@ -105,7 +105,7 @@ class Magika:
             # Rebind weights to this context so op-result nodes land here, not in
             # the GGUF metadata context (which is sized only for the weights). The
             # ggml_tensor pointers are shared; a graph may span both contexts.
-            w = {name: Tensor(ctx, t.ptr) for name, t in self._weights.items()}
+            w = {name: ctx.ref(t) for name, t in self._weights.items()}
 
             inp = ctx.new_tensor_3d(F32, 257, self.INP_BYTES, n_files, name="input").set_input()
 

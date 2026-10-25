@@ -22,6 +22,7 @@ import numpy as np
 
 import ggml as _ggml
 
+from .errors import GGMLError
 from .types import DType, F32, dtype_to_numpy
 
 if TYPE_CHECKING:
@@ -385,13 +386,36 @@ class Tensor:
     ``mul_mat(a, b)`` requires ``a.ne[0] == b.ne[0]`` (the shared inner dim).
     """
 
-    __slots__ = ("ctx", "ptr")
+    __slots__ = ("ctx", "_ptr", "_owner")
 
-    def __init__(self, ctx: "Context", ptr):
-        # Strong reference to the context keeps it (and this tensor's metadata)
-        # alive; op methods use ctx.ptr as the ggml context argument.
+    def __init__(self, ctx: "Context", ptr, *, owner: "Optional[Context]" = None):
+        # ``ctx`` is where op results land; ``owner`` is the context whose arena
+        # holds this tensor's metadata (they differ for :meth:`Context.ref`).
+        # Strong references to both keep that metadata alive.
         self.ctx = ctx
-        self.ptr = ptr
+        self._ptr = ptr
+        self._owner = ctx if owner is None else owner
+
+    @property
+    def ptr(self):
+        """The ``ggml_tensor *``, or :class:`GGMLError` once its context is closed.
+
+        ``ggml_free`` releases the metadata of every tensor in a context, so a
+        tensor whose owning context was closed would otherwise dereference
+        freed memory.
+        """
+        if self._owner.ptr is None:
+            raise GGMLError("tensor used after its context was closed")
+        return self._ptr
+
+    def _require_buffer(self, what: str) -> None:
+        # ggml_backend_tensor_set/get abort the process on an unallocated tensor.
+        if not self.ptr.contents.buffer:
+            raise GGMLError(
+                f"{what}: tensor {self.name!r} has no backend buffer; allocate it "
+                f"first (Backend.alloc_ctx_tensors, GAllocr.alloc_graph or "
+                f"Scheduler.alloc_graph)"
+            )
 
     # -- properties ---------------------------------------------------------
 
@@ -505,6 +529,7 @@ class Tensor:
         ``x`` is coerced to this tensor's dtype and made contiguous; its total
         byte size must then match the tensor's. Wraps ``ggml_backend_tensor_set``.
         """
+        self._require_buffer("set")
         arr = np.ascontiguousarray(x, dtype=dtype_to_numpy(self.dtype))
         if arr.nbytes != self.nbytes:
             raise ValueError(
@@ -523,6 +548,7 @@ class Tensor:
         have no numpy equivalent. ``offset`` is the byte offset into the tensor.
         Wraps ``ggml_backend_tensor_set``.
         """
+        self._require_buffer("set_raw")
         mv = memoryview(data).cast("B")
         if offset < 0:
             raise ValueError(f"set_raw: offset must be non-negative, got {offset}")
@@ -540,6 +566,7 @@ class Tensor:
         ``out`` must be contiguous and exactly the tensor's byte size. Wraps
         ``ggml_backend_tensor_get`` and returns ``out``.
         """
+        self._require_buffer("get")
         if not out.flags["C_CONTIGUOUS"]:
             raise ValueError("get: out must be a C-contiguous array")
         if out.nbytes != self.nbytes:
@@ -636,6 +663,8 @@ class Tensor:
         return out if dtype is None else out.astype(dtype, copy=False)
 
     def __repr__(self) -> str:
+        if self._owner.ptr is None:
+            return "<ggml.Tensor closed>"
         return f"<ggml.Tensor name={self.name!r} ne={self.ne} dtype={self.dtype.name}>"
 
 
@@ -652,8 +681,8 @@ def _make_op(name: str, fn_name: str, params, doc: str):
     binding overhead -- graph building calls these once per node.
     """
     signature = ["self"]
-    call_args = ["self.ctx.ptr", "self.ptr"]
-    namespace = {"_fn": getattr(_ggml, fn_name), "Tensor": Tensor,
+    call_args = ["ctx", "self.ptr"]
+    namespace = {"_fn": getattr(_ggml, fn_name), "Tensor": Tensor, "GGMLError": GGMLError,
                  "DType": DType, "Optional": Optional}
 
     for param in params:
@@ -669,6 +698,9 @@ def _make_op(name: str, fn_name: str, params, doc: str):
 
     source = (
         f"def {name}({', '.join(signature)}) -> Tensor:\n"
+        f"    ctx = self.ctx.ptr\n"
+        f"    if ctx is None:\n"
+        f"        raise GGMLError('{name}: the target context is closed')\n"
         f"    return Tensor(self.ctx, _fn({', '.join(call_args)}))\n"
     )
     exec(compile(source, f"<ggbond op {name}>", "exec"), namespace)

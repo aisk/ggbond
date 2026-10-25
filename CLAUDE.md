@@ -85,7 +85,8 @@ with Backend.cpu_init() as be, \
 - `a.mul_mat(b)` requires `a.ne[0] == b.ne[0]` (shared inner dim) and yields `ne = (a.ne[1], b.ne[1])`. For NumPy arrays with matching column counts, `ta.mul_mat(tb)` computes `b @ a.T`. To compute a conventional `left @ right`, store `right.T` as the first GGML operand and `left` as the second.
 
 ### Lifecycle rules
-- A `Context` must outlive every `Tensor`/`Graph` it produced — `ggml_free` releases all their metadata at once. `Tensor` and `Graph` keep the context alive unless it is explicitly closed. A `Context` also retains an external `mem_buffer` object for its native lifetime.
+- A `Context` must outlive every `Tensor`/`Graph` it produced — `ggml_free` releases all their metadata at once. `Tensor` and `Graph` keep the context alive unless it is explicitly closed, and using one after an explicit close raises `GGMLError` instead of touching freed memory (a `ctx.ref` tensor also tracks the context that owns its metadata). A `Context` also retains an external `mem_buffer` object for its native lifetime, and the `Buffer`s that `Backend.alloc_ctx_tensors` allocated for it, which in turn retain their `Backend`, so tensor data cannot be garbage-collected out from under a live context.
+- `Tensor.set` / `set_raw` / `get` raise `GGMLError` on a tensor with no backend buffer yet; ggml itself would abort the process.
 - For `GGUF`, remember the split ownership above: closing the `GGUF` does **not** close its data `.context`.
 - A `GAllocr` owns the memory of every graph node it allocated. Download results **before** the allocator closes; reading afterwards silently returns garbage. (In the canonical flow above `tc` is created before `alloc_ctx_tensors`, so it lives in the backend buffer instead and can be read later.)
 - All wrappers are context managers with idempotent `close()` + `__del__`. Prefer `with` blocks.

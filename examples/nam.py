@@ -351,8 +351,7 @@ def _array_forward(ctx, R, arr, y, cond, head_input):
 
 def build_graph(model: NamModel, ctx: Context, n_samples: int):
     """Build the full forward graph in ``ctx``. Returns (graph, inp, out)."""
-    def R(t: Tensor) -> Tensor:  # rebind a weight tensor onto this graph's context
-        return Tensor(ctx, t.ptr)
+    R = ctx.ref  # rebind a weight tensor onto this graph's context
 
     inp = ctx.new_tensor_2d(F32, n_samples, 1, name="input").set_input()
     cond = inp

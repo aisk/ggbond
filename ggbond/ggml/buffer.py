@@ -42,6 +42,10 @@ class Buffer:
         self.ptr = nonnull(ptr, "ggml_backend_buffer_t")
         # The Backend that will free this buffer, or None once released.
         self._owner = owner
+        # The allocating Backend, kept alive for as long as this buffer is: the
+        # backend frees its buffers on close, so it must not be collected while
+        # tensors still point into one.
+        self._backend = owner
         self._closed = False
 
     # -- queries ------------------------------------------------------------

@@ -48,6 +48,8 @@ class Context:
         self.no_alloc = no_alloc
         self._owns = True
         self._closed = False
+        # Backend buffers holding this context's tensor data (see retain_buffer).
+        self._buffers = []
 
     @classmethod
     def for_tensors(
@@ -93,7 +95,17 @@ class Context:
         self.no_alloc = no_alloc
         self._owns = owns
         self._closed = False
+        self._buffers = []
         return self
+
+    def retain_buffer(self, buffer) -> None:
+        """Keep ``buffer`` (and through it, its backend) alive with this context.
+
+        Called by :meth:`Backend.alloc_ctx_tensors`, so the memory behind this
+        context's tensors cannot be garbage-collected while the tensors are
+        still reachable.
+        """
+        self._buffers.append(buffer)
 
     # -- tensor factories ---------------------------------------------------
     #
@@ -172,7 +184,7 @@ class Context:
         not copied, and a graph may freely span both contexts as long as both
         outlive it.
         """
-        return Tensor(self, tensor.ptr)
+        return Tensor(self, tensor.ptr, owner=tensor._owner)
 
     # -- graph factory ------------------------------------------------------
 
@@ -189,6 +201,7 @@ class Context:
             self._closed = True
             self.ptr = None
             self._mem_buffer = None
+            self._buffers = []
 
     def __enter__(self) -> "Context":
         return self
