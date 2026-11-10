@@ -9,7 +9,7 @@ import ggml as _ggml
 
 from .buffer import BufferType
 from .errors import GGMLError, check_status, nonnull
-from .handle import Handle
+from .gallocr import GraphAllocator
 
 if TYPE_CHECKING:
     from .backend import Backend
@@ -24,7 +24,7 @@ def _ptr_array(items):
     return arr
 
 
-class Scheduler(Handle):
+class Scheduler(GraphAllocator):
     """Splits a computation graph across one or more backends, allocates its
     working memory, and computes it -- the multi-backend analog of
     :class:`GAllocr` + :meth:`Backend.compute`.
@@ -33,6 +33,10 @@ class Scheduler(Handle):
     ``ggml_backend_sched_new`` does. The scheduler keeps them alive, and closing
     a backend closes the scheduler first. Closing the scheduler frees only the
     ``ggml_backend_sched``; the backends are owned by their own wrappers.
+
+    Like :class:`GAllocr`, the scheduler owns the memory of the graph tensors
+    it allocated: once it is closed they are unallocated again and reading them
+    raises :class:`GGMLError`, so download results first.
     """
 
     def __init__(
@@ -71,6 +75,13 @@ class Scheduler(Handle):
         self._backends = backends
         for backend in backends:
             backend._track(self)
+        self._init_tracking()
+
+    def _buffer_sizes(self) -> tuple:
+        return tuple(
+            _ggml.ggml_backend_sched_get_buffer_size(self._ptr, backend._ptr)
+            for backend in self._backends
+        )
 
     # -- allocation ---------------------------------------------------------
 
@@ -78,10 +89,12 @@ class Scheduler(Handle):
         """Pre-allocate backend buffers from a measure graph."""
         if not _ggml.ggml_backend_sched_reserve(self.ptr, graph.ptr):
             raise GGMLError("ggml_backend_sched_reserve failed")
+        self._reserved()
 
     def alloc_graph(self, graph: "Graph") -> None:
         if not _ggml.ggml_backend_sched_alloc_graph(self.ptr, graph.ptr):
             raise GGMLError("ggml_backend_sched_alloc_graph failed")
+        self._allocated(graph)
 
     # -- compute ------------------------------------------------------------
 
@@ -92,11 +105,14 @@ class Scheduler(Handle):
         """
         status = _ggml.ggml_backend_sched_graph_compute(self.ptr, graph.ptr)
         check_status(status, "ggml_backend_sched_graph_compute")
+        # ggml allocates the graph itself when alloc_graph was not called.
+        self._allocated(graph)
 
     def compute_async(self, graph: "Graph") -> None:
         """Start computing ``graph``; call :meth:`synchronize` before reading results."""
         status = _ggml.ggml_backend_sched_graph_compute_async(self.ptr, graph.ptr)
         check_status(status, "ggml_backend_sched_graph_compute_async")
+        self._allocated(graph)
 
     def synchronize(self) -> None:
         _ggml.ggml_backend_sched_synchronize(self.ptr)
@@ -143,5 +159,6 @@ class Scheduler(Handle):
     # -- lifecycle ----------------------------------------------------------
 
     def _free(self, ptr) -> None:
+        super()._free(ptr)
         _ggml.ggml_backend_sched_free(ptr)
         self._backends = ()

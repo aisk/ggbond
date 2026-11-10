@@ -45,13 +45,18 @@ class Graph:
                 ctx.ptr, size or _ggml.GGML_DEFAULT_GRAPH_SIZE, grads
             )
         self._ptr = nonnull(ptr, "ggml_new_graph")
+        self._epoch = ctx._epoch
         self.grads = grads
 
     @property
     def ptr(self):
-        """The ``ggml_cgraph *``, or :class:`GGMLError` once its context is closed."""
-        if self.ctx._ptr is None:
-            raise GGMLError("graph used after its context was closed")
+        """The ``ggml_cgraph *``, or :class:`GGMLError` once its context is closed or reset."""
+        epoch = self._epoch
+        if epoch is None or epoch is not self.ctx._epoch:
+            raise GGMLError(
+                "graph used after its context was "
+                + ("closed" if self.ctx._ptr is None else "reset")
+            )
         return self._ptr
 
     # -- building -----------------------------------------------------------
@@ -178,6 +183,6 @@ class Graph:
         return self.nodes()
 
     def __repr__(self) -> str:
-        if self.ctx._ptr is None:
+        if self._epoch is not self.ctx._epoch:
             return "<ggml.Graph closed>"
         return f"<ggml.Graph n_nodes={self.n_nodes} n_leafs={self.n_leafs}>"

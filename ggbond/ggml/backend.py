@@ -155,8 +155,8 @@ class Backend(Handle):
 
         Wraps ``ggml_backend_alloc_ctx_tensors``. ``ctx`` keeps the returned
         :class:`Buffer` alive, so the return value can be ignored: the memory
-        is freed when the buffer is closed explicitly, or once both ``ctx`` and
-        your own reference to the buffer are gone.
+        is freed when the buffer is closed explicitly, or once ``ctx`` is closed
+        or reset and your own reference to the buffer is gone.
         """
         buffer = Buffer(
             nonnull(
@@ -165,6 +165,7 @@ class Backend(Handle):
             ),
             backend=self,
         )
+        buffer._bind(ctx)
         ctx._buffers.append(buffer)
         return buffer
 

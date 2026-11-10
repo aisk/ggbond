@@ -195,6 +195,29 @@ class OpGenerationTests(unittest.TestCase):
                 binding = inspect.signature(getattr(_ggml, fn_name)).parameters
                 self.assertEqual(len(binding), 2 + len(params))
 
+    def test_the_stub_file_matches_the_op_tables(self):
+        from pathlib import Path
+
+        import ggbond.ggml.ops
+        from ggbond.ggml.tensor import render_ops_stub
+
+        stub = Path(ggbond.ggml.ops.__file__).with_suffix(".pyi")
+        self.assertEqual(
+            stub.read_text(), render_ops_stub(),
+            "ops.pyi is out of date; run: python scripts/gen_stubs.py",
+        )
+        compile(stub.read_text(), str(stub), "exec")
+
+    def test_no_class_attribute_shadows_an_op(self):
+        from ggbond.ggml.ops import ContextOps, TensorOps
+        from ggbond.ggml.tensor import _op_specs
+
+        for name, *_ in _op_specs():
+            self.assertIn(name, vars(TensorOps))
+            self.assertIn(name, vars(ContextOps))
+            self.assertNotIn(name, vars(Tensor))
+            self.assertNotIn(name, vars(Context))
+
     def test_inplace_variants_are_generated_from_the_bindings(self):
         self.assertTrue(hasattr(Tensor, "add_inplace"))
         self.assertTrue(hasattr(Context, "rope_ext_inplace"))

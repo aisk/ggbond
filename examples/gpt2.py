@@ -6,8 +6,8 @@ produced by ggml's convert script -- magic ``ggml``), not GGUF: hparams, the
 inline vocab, and the named weights are parsed straight from the file with plain
 Python I/O, then uploaded into backend-resident tensors.
 
-The two-phase ggml flow is explicit throughout: per token we build a fresh
-metadata graph in its own throwaway :class:`Context`, let a reused
+The two-phase ggml flow is explicit throughout: per token we reset one
+metadata :class:`Context`, build a fresh graph in it, let a reused
 :class:`GAllocr` allocate its working memory, upload the input ids, compute, and
 read the last token's logits back into numpy.
 
@@ -137,7 +137,8 @@ class GPT2Layer:
 
 
 class GPT2Model:
-    """Owns the weight + KV contexts so they outlive every graph built from them."""
+    """Owns the weight + KV contexts so they outlive every graph built from them,
+    and the context each evaluation builds its graph in."""
 
     def __init__(self):
         self.hparams = None
@@ -147,10 +148,13 @@ class GPT2Model:
         self.memory_k = self.memory_v = None
         self.ctx_w: Context | None = None
         self.ctx_kv: Context | None = None
+        # Holds one evaluation's graph at a time; reset before each one.
+        self.ctx_graph = Context.for_tensors(0, graph_size=GPT2_MAX_NODES)
 
     def close(self):
         # Both contexts must outlive any graph referencing their tensors; they
         # are freed independently of the backend buffers that hold the data.
+        self.ctx_graph.close()
         if self.ctx_kv is not None:
             self.ctx_kv.close()
         if self.ctx_w is not None:
@@ -459,19 +463,22 @@ def gpt2_eval(model, backend, allocr, n_past, embd_inp) -> np.ndarray:
     """Run the transformer and return logits for the last token."""
     N = len(embd_inp)
     n_vocab = model.hparams.n_vocab
-    with Context.for_tensors(0, graph_size=GPT2_MAX_NODES) as ctx:
-        graph, embd, position, logits = gpt2_graph(model, ctx, n_past, N)
+    # Reuse one metadata context for every evaluation: ggml_reset empties it,
+    # which also retires the previous evaluation's tensors and graph.
+    ctx = model.ctx_graph
+    ctx.reset()
+    graph, embd, position, logits = gpt2_graph(model, ctx, n_past, N)
 
-        allocr.alloc_graph(graph)
+    allocr.alloc_graph(graph)
 
-        embd.write(np.asarray(embd_inp, dtype=np.int32))
-        position.write(np.arange(n_past, n_past + N, dtype=np.int32))
+    embd.write(np.asarray(embd_inp, dtype=np.int32))
+    position.write(np.arange(n_past, n_past + N, dtype=np.int32))
 
-        backend.compute(graph)
+    backend.compute(graph)
 
-        # logits hold [n_vocab, N] row-major (n_vocab fastest); return just the
-        # last token's row, mirroring the C++ which reads that slice directly.
-        return logits.to_numpy().reshape(N, n_vocab)[N - 1].copy()
+    # logits hold [n_vocab, N] row-major (n_vocab fastest); return just the
+    # last token's row, mirroring the C++ which reads that slice directly.
+    return logits.to_numpy().reshape(N, n_vocab)[N - 1].copy()
 
 
 # ============================================================================
@@ -529,9 +536,8 @@ def main():
         allocr = GAllocr.from_backend(backend)
         n_tokens = min(model.hparams.n_ctx, args.n_batch)
         n_past_wc = model.hparams.n_ctx - n_tokens
-        with Context.for_tensors(0, graph_size=GPT2_MAX_NODES) as wctx:
-            gworst, *_ = gpt2_graph(model, wctx, n_past_wc, n_tokens)
-            allocr.reserve(gworst)
+        gworst, *_ = gpt2_graph(model, model.ctx_graph, n_past_wc, n_tokens)
+        allocr.reserve(gworst)
         mem_mb = allocr.buffer_size(0) / (1024.0 * 1024.0)
         print(f"main: compute buffer size: {mem_mb:.2f} MB")
 

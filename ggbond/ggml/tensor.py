@@ -24,7 +24,9 @@ import numpy as np
 
 import ggml as _ggml
 
+from .buffer import is_freed
 from .errors import GGMLError
+from .ops import TensorOps
 from .types import DType, F32, I32, dtype_to_numpy
 
 if TYPE_CHECKING:
@@ -612,7 +614,7 @@ _OP_TENSORS = {
 }
 
 
-class Tensor:
+class Tensor(TensorOps):
     """A ggml tensor and the :class:`Context` whose arena holds its metadata.
 
     :attr:`ne` is the ggml-order shape ``(ne0, ne1, ne2, ne3)`` exactly as ggml
@@ -626,22 +628,28 @@ class Tensor:
     Two wrappers of the same ``ggml_tensor`` compare equal and hash alike.
     """
 
-    __slots__ = ("ctx", "_ptr")
+    __slots__ = ("ctx", "_ptr", "_epoch")
 
     def __init__(self, ctx: "Context", ptr):
         self.ctx = ctx
         self._ptr = ptr
+        # The generation of ``ctx`` this tensor belongs to (see Context.reset).
+        self._epoch = ctx._epoch
 
     @property
     def ptr(self):
-        """The ``ggml_tensor *``, or :class:`GGMLError` once its context is closed.
+        """The ``ggml_tensor *``, or :class:`GGMLError` once its context is closed or reset.
 
-        ``ggml_free`` releases the metadata of every tensor in a context, so a
-        tensor whose context was closed would otherwise dereference freed
-        memory.
+        ``ggml_free`` and ``ggml_reset`` release the metadata of every tensor in
+        a context, so a tensor outliving them would otherwise dereference freed
+        or reused memory.
         """
-        if self.ctx._ptr is None:
-            raise GGMLError("tensor used after its context was closed")
+        epoch = self._epoch
+        if epoch is None or epoch is not self.ctx._epoch:
+            raise GGMLError(
+                "tensor used after its context was "
+                + ("closed" if self.ctx._ptr is None else "reset")
+            )
         return self._ptr
 
     @property
@@ -659,11 +667,19 @@ class Tensor:
 
     def _require_buffer(self, what: str) -> None:
         # ggml_backend_tensor_set/get abort the process on an unallocated tensor.
-        if not self.ptr.contents.buffer:
+        # Whoever frees a buffer clears this field on the tensors it allocated,
+        # so "no buffer" also covers "its allocator or buffer was closed".
+        buffer = self.ptr.contents.buffer
+        if not buffer:
             raise GGMLError(
                 f"{what}: tensor {self.name!r} has no backend buffer; allocate it "
                 f"first (Backend.alloc_ctx_tensors, GAllocr.alloc_graph or "
-                f"Scheduler.alloc_graph)"
+                f"Scheduler.alloc_graph), and read results before closing the "
+                f"allocator or buffer that holds them"
+            )
+        if is_freed(buffer):
+            raise GGMLError(
+                f"{what}: the backend buffer holding tensor {self.name!r} was freed"
             )
 
     # -- properties ---------------------------------------------------------
@@ -885,16 +901,13 @@ class Tensor:
                 f"write_raw: {mv.nbytes} bytes at offset {offset} exceed tensor "
                 f"size {self.nbytes} (ne={self.ne}, dtype={self.dtype.name})"
             )
-        # Borrow the caller's memory when it is a contiguous writable buffer or
-        # an immutable ``bytes``; copy only for the remaining read-only cases.
-        if isinstance(data, bytes):
-            ptr = ctypes.c_char_p(data)
-        elif mv.readonly or not mv.c_contiguous:
-            ptr = (ctypes.c_char * mv.nbytes).from_buffer_copy(mv)
-        else:
-            ptr = (ctypes.c_char * mv.nbytes).from_buffer(mv)
+        if not mv.nbytes:
+            return
+        # numpy can take the address of any buffer, read-only ones included, so
+        # the caller's memory is handed to ggml without an intermediate copy.
+        source = np.frombuffer(mv, dtype=np.uint8)
         _ggml.ggml_backend_tensor_set(
-            self.ptr, ctypes.cast(ptr, ctypes.c_void_p), offset, mv.nbytes
+            self.ptr, source.ctypes.data_as(ctypes.c_void_p), offset, mv.nbytes
         )
 
     def read(self, out: "np.ndarray") -> "np.ndarray":
@@ -1005,7 +1018,7 @@ class Tensor:
         return out if dtype is None else out.astype(dtype, copy=False)
 
     def __repr__(self) -> str:
-        if self.ctx._ptr is None:
+        if self._epoch is not self.ctx._epoch:
             return "<ggml.Tensor closed>"
         return f"<ggml.Tensor name={self.name!r} ne={self.ne} dtype={self.dtype.name}>"
 
@@ -1136,12 +1149,63 @@ def _make_op(name: str, fn_name: str, params, doc: str, check, *, on_context: bo
     return method
 
 
-def install_ops(cls, *, on_context: bool) -> None:
-    """Install every generated op on ``cls`` (:class:`Tensor` or :class:`Context`)."""
+def install_ops(holder, *, on_context: bool, owners) -> None:
+    """Install every generated op on ``holder``.
+
+    ``holder`` is :class:`~ggbond.ggml.ops.TensorOps` or
+    :class:`~ggbond.ggml.ops.ContextOps`; ``owners`` are the classes that
+    inherit from it, checked so a hand-written attribute never silently
+    shadows an op.
+    """
     for name, fn_name, params, doc, check in _op_specs():
-        if name in cls.__dict__:
-            raise RuntimeError(f"op {name!r} would shadow {cls.__name__}.{name}")
-        setattr(cls, name, _make_op(name, fn_name, params, doc, check, on_context=on_context))
+        for owner in owners:
+            if name in vars(owner):
+                raise RuntimeError(f"op {name!r} is shadowed by {owner.__name__}.{name}")
+        setattr(holder, name, _make_op(name, fn_name, params, doc, check, on_context=on_context))
 
 
-install_ops(Tensor, on_context=False)
+def render_ops_stub() -> str:
+    """Return the source of ``ops.pyi``, describing every generated op.
+
+    Type checkers and IDEs cannot see methods created with ``exec``, so the
+    same tables that generate the methods also generate this stub. Written to
+    disk by ``scripts/gen_stubs.py``; a test keeps the file in sync.
+    """
+    def render(on_context: bool) -> list:
+        lines = []
+        for name, fn_name, params, doc, _check in _op_specs():
+            method = _make_op(name, fn_name, params, doc, None, on_context=on_context)
+            args = ["self"] + (["a: Tensor"] if on_context else [])
+            for param in params:
+                annotation = _ARG_ANNOTATION[param[1]]
+                default = " = ..." if len(param) > 2 else ""
+                args.append(f"{param[0]}: {annotation}{default}")
+            lines.append(f"    def {name}({', '.join(args)}) -> Tensor:")
+            doc_lines = method.__doc__.split("\n")
+            lines.append(f'        """{doc_lines[0]}')
+            lines.extend(f"        {line}".rstrip() for line in doc_lines[1:])
+            lines.append('        """')
+            lines.append("")
+        return lines
+
+    out = [
+        '"""Generated by scripts/gen_stubs.py from the op tables in tensor.py. Do not edit."""',
+        "",
+        "from typing import Optional",
+        "",
+        "from .tensor import PoolOp, RopeType, ScaleMode, SortOrder, Tensor",
+        "from .types import DType",
+        "",
+        "class TensorOps:",
+        "    __slots__ = ()",
+        "",
+        *render(False),
+        "class ContextOps:",
+        "    __slots__ = ()",
+        "",
+        *render(True),
+    ]
+    return "\n".join(out).rstrip() + "\n"
+
+
+install_ops(TensorOps, on_context=False, owners=(Tensor,))

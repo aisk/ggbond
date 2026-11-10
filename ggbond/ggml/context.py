@@ -10,6 +10,7 @@ import ggml as _ggml
 from .errors import GGMLError, nonnull
 from .handle import Handle
 from .types import DType, F32
+from .ops import ContextOps
 from .tensor import Tensor, install_ops
 from .graph import Graph, graph_overhead_custom
 
@@ -23,7 +24,7 @@ def tensor_overhead() -> int:
     return _ggml.ggml_tensor_overhead()
 
 
-class Context(Handle):
+class Context(Handle, ContextOps):
     """Owns a ``ggml_context``: the arena that holds tensor metadata (and,
     when ``no_alloc=False``, tensor data).
 
@@ -67,6 +68,10 @@ class Context(Handle):
         self._buffers = []
         # Other contexts whose tensors the ops built here read.
         self._deps = set()
+        # Identity of the current generation of tensors and graphs. Each one
+        # remembers the epoch it was created in and is dead once it differs:
+        # ``None`` after close(), a new object after reset().
+        self._epoch = object()
 
     @classmethod
     def for_tensors(
@@ -109,6 +114,21 @@ class Context(Handle):
         self = cls.__new__(cls)
         self._adopt_ptr(nonnull(ptr, "ggml_context"), owns)
         return self
+
+    def reset(self) -> None:
+        """Empty the arena so the context can be reused (``ggml_reset``).
+
+        Every :class:`Tensor` and :class:`Graph` created here so far is gone:
+        using one afterwards raises :class:`GGMLError`. Backend buffers that
+        were allocated for those tensors are released unless you hold them
+        yourself. This is the cheap way to build a fresh graph per step without
+        creating a new context each time.
+        """
+        ptr = self.ptr
+        self._epoch = object()
+        _ggml.ggml_reset(ptr)
+        self._buffers = []
+        self._deps = set()
 
     # -- arena accounting ---------------------------------------------------
     #
@@ -255,6 +275,7 @@ class Context(Handle):
     # -- lifecycle ----------------------------------------------------------
 
     def _free(self, ptr) -> None:
+        self._epoch = None
         if self._owns:
             _ggml.ggml_free(ptr)
         self._mem_buffer = None
@@ -262,4 +283,4 @@ class Context(Handle):
         self._deps = set()
 
 
-install_ops(Context, on_context=True)
+install_ops(ContextOps, on_context=True, owners=(Context, Handle))

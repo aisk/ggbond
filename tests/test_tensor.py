@@ -49,13 +49,46 @@ class WriteTests(TransferTestCase):
         tensor = self.allocated(4, dtype=I32)
         value = np.array([1, 2, 3, 4], dtype=np.int32)
 
-        for data in (value.tobytes(), bytearray(value.tobytes()), value, memoryview(value.tobytes())):
+        read_only = value.copy()
+        read_only.setflags(write=False)
+        sources = (
+            value.tobytes(),
+            bytearray(value.tobytes()),
+            value,
+            read_only,
+            memoryview(value.tobytes()),
+            memoryview(value.tobytes()).toreadonly(),
+        )
+        for data in sources:
             tensor.write(np.zeros(4, dtype=np.int32))
             tensor.write_raw(data)
             np.testing.assert_array_equal(tensor.to_numpy(), value)
 
         tensor.write_raw(np.array([9], dtype=np.int32), offset=8)
         np.testing.assert_array_equal(tensor.to_numpy(), [1, 2, 9, 4])
+        tensor.write_raw(b"")
+        np.testing.assert_array_equal(tensor.to_numpy(), [1, 2, 9, 4])
+
+    def test_write_raw_does_not_copy_its_source(self):
+        import ctypes
+        from unittest import mock
+
+        import ggml as _ggml
+
+        tensor = self.allocated(4, dtype=I32)
+        seen = []
+        real = _ggml.ggml_backend_tensor_set
+
+        def spy(t, data, offset, size):
+            seen.append(ctypes.cast(data, ctypes.c_void_p).value)
+            return real(t, data, offset, size)
+
+        for source in (np.arange(4, dtype=np.int32), bytearray(16)):
+            read_only = memoryview(source).toreadonly()
+            with mock.patch.object(_ggml, "ggml_backend_tensor_set", spy):
+                tensor.write_raw(read_only)
+            address = np.frombuffer(source, dtype=np.uint8).ctypes.data
+            self.assertEqual(seen[-1], address)
 
     def test_write_raw_checks_bounds(self):
         tensor = self.allocated(4)

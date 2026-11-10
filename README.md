@@ -79,6 +79,12 @@ exposes `__version__`.
 - Every wrapper that owns a native handle raises `GGMLError` once closed.
   Closing a `Backend` first closes the buffers, allocators and schedulers built
   on it.
+- A `GAllocr` or `Scheduler` owns the memory of the graph tensors it allocated.
+  Read results before closing it; afterwards those tensors are unallocated and
+  reading them raises `GGMLError`.
+- `Context.reset()` empties a context for reuse, for example to build a new
+  graph per generated token. Tensors and graphs created before the reset can no
+  longer be used.
 
 ## Main classes
 
@@ -109,6 +115,7 @@ Magika currently uses the CPU backend. Model files are not included.
 ```bash
 uv run python -m unittest discover -v
 uv run examples/simple.py
+uv run scripts/gen_stubs.py   # after changing an op table
 uv build
 ```
 
