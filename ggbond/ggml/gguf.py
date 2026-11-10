@@ -4,7 +4,7 @@ A :class:`GGUF` wraps the ``gguf_context`` returned by ``gguf_init_from_file``
 and exposes its readers and writers ~1:1 as Python methods. It does *not* read
 tensor data itself -- ``data_offset`` / ``get_tensor_offset`` /
 ``get_tensor_name`` give the caller everything needed to seek into the file and
-upload weights via ``Tensor.set`` / ``ggml_backend_tensor_set``.
+upload weights via ``Tensor.write_raw`` (``ggml_backend_tensor_set``).
 
 The typed ``get_val_*`` / ``set_val_*`` accessors are generated from
 :data:`_KV_TYPES`; :meth:`GGUF.value` dispatches over them on the stored type
@@ -22,6 +22,7 @@ import numpy as np
 import ggml as _ggml
 
 from .errors import GGMLError, nonnull
+from .handle import Handle
 from .context import Context
 from .tensor import Tensor
 from .types import DType
@@ -46,40 +47,25 @@ class GGUFType(IntEnum):
     FLOAT64 = _ggml.GGUF_TYPE_FLOAT64
 
 
-# Module-level aliases, like ``F32`` for ``DType.F32``.
-TYPE_UINT8 = GGUFType.UINT8
-TYPE_INT8 = GGUFType.INT8
-TYPE_UINT16 = GGUFType.UINT16
-TYPE_INT16 = GGUFType.INT16
-TYPE_UINT32 = GGUFType.UINT32
-TYPE_INT32 = GGUFType.INT32
-TYPE_FLOAT32 = GGUFType.FLOAT32
-TYPE_BOOL = GGUFType.BOOL
-TYPE_STRING = GGUFType.STRING
-TYPE_ARRAY = GGUFType.ARRAY
-TYPE_UINT64 = GGUFType.UINT64
-TYPE_INT64 = GGUFType.INT64
-TYPE_FLOAT64 = GGUFType.FLOAT64
-
 # suffix -> (gguf type, python coercion, numpy dtype for arrays of this type).
 # ``str`` and ``bool`` need their own conversions and are handled explicitly.
 _KV_TYPES = {
-    "u8": (TYPE_UINT8, int, np.uint8),
-    "i8": (TYPE_INT8, int, np.int8),
-    "u16": (TYPE_UINT16, int, np.uint16),
-    "i16": (TYPE_INT16, int, np.int16),
-    "u32": (TYPE_UINT32, int, np.uint32),
-    "i32": (TYPE_INT32, int, np.int32),
-    "u64": (TYPE_UINT64, int, np.uint64),
-    "i64": (TYPE_INT64, int, np.int64),
-    "f32": (TYPE_FLOAT32, float, np.float32),
-    "f64": (TYPE_FLOAT64, float, np.float64),
-    "bool": (TYPE_BOOL, bool, np.int8),
+    "u8": (GGUFType.UINT8, int, np.uint8),
+    "i8": (GGUFType.INT8, int, np.int8),
+    "u16": (GGUFType.UINT16, int, np.uint16),
+    "i16": (GGUFType.INT16, int, np.int16),
+    "u32": (GGUFType.UINT32, int, np.uint32),
+    "i32": (GGUFType.INT32, int, np.int32),
+    "u64": (GGUFType.UINT64, int, np.uint64),
+    "i64": (GGUFType.INT64, int, np.int64),
+    "f32": (GGUFType.FLOAT32, float, np.float32),
+    "f64": (GGUFType.FLOAT64, float, np.float64),
+    "bool": (GGUFType.BOOL, bool, np.int8),
 }
 
 # gguf type -> the ``get_val_*`` method name that reads it.
 _TYPE_READER = {gguf_type: f"get_val_{suffix}" for suffix, (gguf_type, _, _) in _KV_TYPES.items()}
-_TYPE_READER[TYPE_STRING] = "get_val_str"
+_TYPE_READER[GGUFType.STRING] = "get_val_str"
 
 # gguf type -> numpy dtype, for reading array values in bulk.
 _TYPE_NUMPY = {gguf_type: dtype for _, (gguf_type, _, dtype) in _KV_TYPES.items()}
@@ -94,7 +80,7 @@ def type_name(gguf_type: GGUFType) -> str:
     return _decode(_ggml.gguf_type_name(int(gguf_type)))
 
 
-class GGUF:
+class GGUF(Handle):
     """Owns a ``gguf_context`` (the parsed GGUF header / metadata).
 
     :meth:`from_file` optionally also creates the ``ggml_context`` that holds the
@@ -102,13 +88,15 @@ class GGUF:
     frees *only* the ``gguf_context`` (via ``gguf_free``); the data :attr:`context`
     is an independently owned :class:`Context` that holds the tensors and must
     outlive any graph referencing them -- close it yourself.
+
+    Metadata also reads like a mapping: ``gguf["general.name"]``,
+    ``"general.name" in gguf``, :meth:`keys` and :meth:`items`.
     """
 
     def __init__(self, ptr, *, context: Optional[Context] = None, owns: bool = True):
-        self.ptr = nonnull(ptr, "gguf_context")
+        self._ptr = nonnull(ptr, "gguf_context")
         self.context = context
         self._owns = owns
-        self._closed = False
         # Buffers handed to gguf by pointer, kept alive until this is closed.
         self._retained = []
 
@@ -130,13 +118,8 @@ class GGUF:
             _ggml.gguf_init_from_file(str(path).encode(), params),
             "gguf_init_from_file",
         )
-        context = Context.from_ptr(holder, no_alloc=no_alloc, owns=True) if create_context else None
+        context = Context.from_ptr(holder, owns=True) if create_context else None
         return cls(ptr, context=context, owns=True)
-
-    @classmethod
-    def from_ptr(cls, ptr, *, context: Optional[Context] = None, owns: bool = True) -> "GGUF":
-        """Wrap an externally created ``gguf_context``."""
-        return cls(ptr, context=context, owns=owns)
 
     @classmethod
     def init_empty(cls) -> "GGUF":
@@ -199,22 +182,22 @@ class GGUF:
         return GGUFType(_ggml.gguf_get_kv_type(self.ptr, i))
 
     def get_val_str(self, i: int) -> str:
-        self._check_key(i, "get_val_str", TYPE_STRING)
+        self._check_key(i, "get_val_str", GGUFType.STRING)
         return _decode(_ggml.gguf_get_val_str(self.ptr, i))
 
     def set_val_str(self, key: str, value: str) -> None:
         _ggml.gguf_set_val_str(self.ptr, key.encode(), str(value).encode())
 
     def get_arr_type(self, i: int) -> GGUFType:
-        self._check_key(i, "get_arr_type", TYPE_ARRAY)
+        self._check_key(i, "get_arr_type", GGUFType.ARRAY)
         return GGUFType(_ggml.gguf_get_arr_type(self.ptr, i))
 
     def get_arr_n(self, i: int) -> int:
-        self._check_key(i, "get_arr_n", TYPE_ARRAY)
+        self._check_key(i, "get_arr_n", GGUFType.ARRAY)
         return _ggml.gguf_get_arr_n(self.ptr, i)
 
     def get_arr_str(self, i: int, j: int) -> str:
-        if self.get_arr_type(i) != TYPE_STRING:
+        if self.get_arr_type(i) != GGUFType.STRING:
             raise GGMLError(
                 f"get_arr_str: key {self.get_key(i)!r} holds a numeric array; use get_arr_data"
             )
@@ -230,7 +213,7 @@ class GGUF:
         element with :meth:`get_arr_str`.
         """
         element_type = self.get_arr_type(i)
-        if element_type == TYPE_STRING:
+        if element_type == GGUFType.STRING:
             raise GGMLError(
                 f"key {self.get_key(i)!r} holds a string array; use get_arr_str"
             )
@@ -245,7 +228,7 @@ class GGUF:
         address = nonnull(_ggml.gguf_get_arr_data(self.ptr, i), "gguf_get_arr_data")
         buffer = (ctypes.c_char * (n * dtype.itemsize)).from_address(address)
         values = np.frombuffer(buffer, dtype=dtype, count=n).copy()
-        return values.astype(np.bool_) if element_type == TYPE_BOOL else values
+        return values.astype(np.bool_) if element_type == GGUFType.BOOL else values
 
     def set_arr_data(self, key: str, gguf_type: GGUFType, values) -> None:
         """Store ``values`` as an array of ``gguf_type`` under ``key``."""
@@ -294,8 +277,8 @@ class GGUF:
         """
         index = self.key_index(key)
         kv_type = self.get_kv_type(index)
-        if kv_type == TYPE_ARRAY:
-            if self.get_arr_type(index) == TYPE_STRING:
+        if kv_type == GGUFType.ARRAY:
+            if self.get_arr_type(index) == GGUFType.STRING:
                 return [self.get_arr_str(index, j) for j in range(self.get_arr_n(index))]
             return self.get_arr_data(index)
         try:
@@ -305,6 +288,19 @@ class GGUF:
                 f"key {self.get_key(index)!r} has unsupported type {kv_type}"
             ) from None
         return getattr(self, reader)(index)
+
+    def __getitem__(self, key: str):
+        """``gguf[key]`` is :meth:`value` for a metadata key."""
+        if not isinstance(key, str):
+            raise TypeError(f"GGUF keys are strings, got {type(key).__name__}")
+        return self.value(key)
+
+    def __contains__(self, key) -> bool:
+        return isinstance(key, str) and self.find_key(key) >= 0
+
+    def get(self, key: str, default=None):
+        """Return the value stored under ``key``, or ``default`` when absent."""
+        return self.value(key) if key in self else default
 
     def keys(self):
         """Iterate over every metadata key, in file order."""
@@ -378,28 +374,15 @@ class GGUF:
 
     # -- lifecycle ----------------------------------------------------------
 
-    def close(self) -> None:
-        if not self._closed and self.ptr is not None:
-            if self._owns:
-                _ggml.gguf_free(self.ptr)
-            self._closed = True
-            self.ptr = None
-            self._retained.clear()
-
-    def __enter__(self) -> "GGUF":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+    def _free(self, ptr) -> None:
+        if self._owns:
+            _ggml.gguf_free(ptr)
+        self._retained.clear()
 
     def __repr__(self) -> str:
-        return f"GGUF(n_kv={self.n_kv}, n_tensors={self.n_tensors})"
+        if self.closed:
+            return "<ggml.GGUF closed>"
+        return f"<ggml.GGUF n_kv={self.n_kv} n_tensors={self.n_tensors}>"
 
 
 def _make_getter(suffix: str, gguf_type: int, coerce):

@@ -33,7 +33,7 @@ def main():
 
     try:
         with Context(mem_size=1 << 20, no_alloc=True) as ctx, \
-                Scheduler.from_backends(backends) as sched:
+                Scheduler(*backends) as sched:
             # ggml shape is the reverse of numpy's; a.ne[0] == b.ne[0] (== 2) is
             # the shared inner dim mul_mat contracts over.
             ta = ctx.new_tensor_2d(F32, *reversed(a.shape), name="a").set_input()
@@ -46,8 +46,8 @@ def main():
             # The scheduler allocates the graph's tensors; upload inputs after.
             sched.reset()
             sched.alloc_graph(graph)
-            ta.set(a)
-            tb.set(b)
+            ta.write(a)
+            tb.write(b)
 
             sched.compute(graph)
 

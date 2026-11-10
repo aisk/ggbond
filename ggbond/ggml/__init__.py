@@ -14,10 +14,10 @@ Typical CPU flow::
         be.set_n_threads(4)
         a = ctx.new_tensor_2d(F32, 3, 4, name="a")  # ggml order = reversed numpy shape
         b = ctx.new_tensor_2d(F32, 3, 2, name="b")
-        c = b.mul_mat(a)                             # numpy a @ b.T == b.mul_mat(a)
+        c = b.mul_mat(a)                             # ggml_mul_mat(ctx, b, a) == a @ b.T
         be.alloc_ctx_tensors(ctx)
-        a.set(np.random.rand(4, 3).astype(np.float32))  # upload via the tensor
-        b.set(np.random.rand(2, 3).astype(np.float32))
+        a.write(np.random.rand(4, 3).astype(np.float32))  # upload via the tensor
+        b.write(np.random.rand(2, 3).astype(np.float32))
         graph = ctx.new_graph().build_forward_expand(c)
         with GAllocr.from_backend(be) as alloc:
             alloc.alloc_graph(graph)
@@ -29,41 +29,33 @@ Typical CPU flow::
 from __future__ import annotations
 
 from .errors import GGMLError
+from .log import LogLevel, log_set
 from .types import DType, dtype_from_numpy, dtype_to_numpy, F32, F16, I8, I16, I32, I64, F64, BF16
-from .tensor import (
-    Tensor,
-    Op,
-    PoolOp,
-    POOL_MAX,
-    POOL_AVG,
-    RopeType,
-    ROPE_TYPE_NORMAL,
-    ROPE_TYPE_NEOX,
-    ROPE_TYPE_MROPE,
-    ROPE_TYPE_VISION,
-    ROPE_TYPE_IMROPE,
-)
+from .tensor import Tensor, Op, PoolOp, RopeType, ScaleMode, SortOrder, TensorFlag
 from .context import Context, tensor_overhead
 from .graph import Graph, graph_overhead_custom
 from .gallocr import GAllocr
 from .buffer import Buffer, BufferType
 from .device import Device, DeviceType
-from .backend import Backend, DEVICE_CPU, DEVICE_GPU, DEVICE_IGPU, DEVICE_ACCEL, DEVICE_META
+from .backend import Backend
 from .scheduler import Scheduler
 from .gguf import GGUF, GGUFType
 
 __all__ = [
     "GGMLError",
+    "LogLevel",
+    "log_set",
     "DType",
     "dtype_from_numpy",
     "dtype_to_numpy",
     "F32", "F16", "I8", "I16", "I32", "I64", "F64", "BF16",
     "Tensor",
     "Op",
-    "PoolOp", "POOL_MAX", "POOL_AVG",
+    "PoolOp",
     "RopeType",
-    "ROPE_TYPE_NORMAL", "ROPE_TYPE_NEOX", "ROPE_TYPE_MROPE", "ROPE_TYPE_VISION",
-    "ROPE_TYPE_IMROPE",
+    "ScaleMode",
+    "SortOrder",
+    "TensorFlag",
     "Context",
     "tensor_overhead",
     "Graph",
@@ -74,7 +66,6 @@ __all__ = [
     "Device",
     "DeviceType",
     "Backend",
-    "DEVICE_CPU", "DEVICE_GPU", "DEVICE_IGPU", "DEVICE_ACCEL", "DEVICE_META",
     "Scheduler",
     "GGUF",
     "GGUFType",

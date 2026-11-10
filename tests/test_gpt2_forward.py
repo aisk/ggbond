@@ -93,7 +93,7 @@ class GPT2ForwardTests(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(prompt_logits)))
 
         # N == 1: the QKV tensor's second dimension is 1, so its row stride is
-        # only visible through .nb4.
+        # only visible through .nb.
         next_logits = gpt2.gpt2_eval(
             self.model, self.backend, self.allocator, 3, [3]
         )

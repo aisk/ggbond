@@ -1,14 +1,15 @@
 """Thin OO wrapper around ``ggml_tensor``.
 
-Each :class:`Tensor` wraps ``(Context, ggml_tensor_p)``. Operation methods map
-1:1 to ggml functions and return a new :class:`Tensor` bound to the same
-context. Building a graph and computing it remain explicit -- nothing here is
-lazy.
+Each :class:`Tensor` wraps ``(Context, ggml_tensor_p)``, where the context is
+the one whose arena holds the tensor's metadata. Building a graph and computing
+it remain explicit -- nothing here is lazy.
 
-Operation methods are generated from the three tables below rather than written
-out one by one: :data:`_UNARY_OPS` for ops taking only the receiver,
-:data:`_BINARY_OPS` for ops taking one more tensor, and :data:`_PARAM_OPS` for
-everything with extra arguments (scalars, optional tensors, dtypes). See
+Every ggml op exists in two spellings generated from the same tables:
+``ctx.add(a, b)`` on :class:`Context`, which is ``ggml_add(ctx, a, b)`` with the
+target context explicit, and ``a.add(b)`` on :class:`Tensor`, sugar for
+``a.ctx.add(a, b)``. The tables are :data:`_UNARY_OPS` for ops taking one
+tensor, :data:`_BINARY_OPS` for ops taking two, and :data:`_PARAM_OPS` for
+everything with extra arguments (scalars, optional tensors, enums). See
 ``_make_op`` for the argument vocabulary.
 """
 
@@ -16,7 +17,7 @@ from __future__ import annotations
 
 import ctypes
 import numbers
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -66,14 +67,32 @@ Op = IntEnum(
 )
 Op.__doc__ = "The ggml operation that produced a tensor (``enum ggml_op``)."
 
-# Module-level aliases, like ``F32`` for ``DType.F32``.
-POOL_MAX = PoolOp.MAX
-POOL_AVG = PoolOp.AVG
-ROPE_TYPE_NORMAL = RopeType.NORMAL
-ROPE_TYPE_NEOX = RopeType.NEOX
-ROPE_TYPE_MROPE = RopeType.MROPE
-ROPE_TYPE_VISION = RopeType.VISION
-ROPE_TYPE_IMROPE = RopeType.IMROPE
+
+
+class SortOrder(IntEnum):
+    """Order for :meth:`Tensor.argsort` (``enum ggml_sort_order``)."""
+
+    ASC = _ggml.GGML_SORT_ORDER_ASC
+    DESC = _ggml.GGML_SORT_ORDER_DESC
+
+
+class ScaleMode(IntEnum):
+    """Interpolation for :meth:`Tensor.upscale` (``enum ggml_scale_mode``)."""
+
+    NEAREST = _ggml.GGML_SCALE_MODE_NEAREST
+    BILINEAR = _ggml.GGML_SCALE_MODE_BILINEAR
+    BICUBIC = _ggml.GGML_SCALE_MODE_BICUBIC
+
+
+class TensorFlag(IntFlag):
+    """Bits of :attr:`Tensor.flags` (``enum ggml_tensor_flag``)."""
+
+    INPUT = _ggml.GGML_TENSOR_FLAG_INPUT
+    OUTPUT = _ggml.GGML_TENSOR_FLAG_OUTPUT
+    PARAM = _ggml.GGML_TENSOR_FLAG_PARAM
+    LOSS = _ggml.GGML_TENSOR_FLAG_LOSS
+    COMPUTE = _ggml.GGML_TENSOR_FLAG_COMPUTE
+
 
 # Python scalars accepted by the arithmetic operators (bool and numpy scalars
 # included).
@@ -88,6 +107,8 @@ _BOOL = "bool"
 _DTYPE = "dtype"
 _POOL_OP = "pool_op"
 _ROPE_TYPE = "rope_type"
+_SORT_ORDER = "sort_order"
+_SCALE_MODE = "scale_mode"
 
 # How each kind is converted to the ctypes argument, and how it is annotated.
 _ARG_CONV = {
@@ -99,6 +120,8 @@ _ARG_CONV = {
     _DTYPE: "int({0})",
     _POOL_OP: "int({0})",
     _ROPE_TYPE: "int({0})",
+    _SORT_ORDER: "int({0})",
+    _SCALE_MODE: "int({0})",
 }
 
 _ARG_ANNOTATION = {
@@ -110,13 +133,17 @@ _ARG_ANNOTATION = {
     _DTYPE: "DType",
     _POOL_OP: "PoolOp",
     _ROPE_TYPE: "RopeType",
+    _SORT_ORDER: "SortOrder",
+    _SCALE_MODE: "ScaleMode",
 }
 
-# Ops taking only the receiver: name -> ggml function name.
+# Ops taking one tensor: name -> ggml function name.
 _UNARY_OPS = {
     "relu": "ggml_relu",
     "gelu": "ggml_gelu",
     "gelu_quick": "ggml_gelu_quick",
+    "gelu_erf": "ggml_gelu_erf",
+    "swiglu": "ggml_swiglu",
     "silu": "ggml_silu",
     "elu": "ggml_elu",
     "step": "ggml_step",
@@ -133,6 +160,14 @@ _UNARY_OPS = {
     "exp": "ggml_exp",
     "sin": "ggml_sin",
     "cos": "ggml_cos",
+    "floor": "ggml_floor",
+    "ceil": "ggml_ceil",
+    "round": "ggml_round",
+    "trunc": "ggml_trunc",
+    "sgn": "ggml_sgn",
+    "softplus": "ggml_softplus",
+    "expm1": "ggml_expm1",
+    "cumsum": "ggml_cumsum",
     "sum": "ggml_sum",
     "sum_rows": "ggml_sum_rows",
     "mean": "ggml_mean",
@@ -142,7 +177,7 @@ _UNARY_OPS = {
     "transpose": "ggml_transpose",
 }
 
-# Ops taking the receiver plus one more tensor: name -> ggml function name.
+# Ops taking two tensors: name -> ggml function name.
 _BINARY_OPS = {
     "add": "ggml_add",
     "add1": "ggml_add1",
@@ -154,11 +189,12 @@ _BINARY_OPS = {
     "get_rows": "ggml_get_rows",
     "cpy": "ggml_cpy",
     "repeat": "ggml_repeat",
+    "reshape": "ggml_reshape",
 }
 
 # Ops with extra arguments: name -> (ggml function, params, doc). Each param is
-# ``(name, kind)`` or ``(name, kind, default)``; ``self`` is always passed as
-# the first tensor, matching ggml's ``a`` argument.
+# ``(name, kind)`` or ``(name, kind, default)``, listed after ggml's ``ctx`` and
+# ``a`` arguments. Docs say ``self`` for ``a``, the receiver of the Tensor form.
 _PARAM_OPS = {
     # -- metadata clones (not graph nodes) --
     "dup_tensor": (
@@ -194,6 +230,11 @@ _PARAM_OPS = {
         (("negative_slope", _FLOAT), ("inplace", _BOOL, False)),
         "Leaky ReLU with the given negative slope.",
     ),
+    "argsort": (
+        "ggml_argsort",
+        (("order", _SORT_ORDER),),
+        "Return the indices that sort each row. ``order`` is a :class:`SortOrder`.",
+    ),
     "top_k": (
         "ggml_top_k",
         (("k", _INT),),
@@ -215,6 +256,11 @@ _PARAM_OPS = {
         (("eps", _FLOAT),),
         "RMS normalization with epsilon ``eps``.",
     ),
+    "l2_norm": (
+        "ggml_l2_norm",
+        (("eps", _FLOAT),),
+        "L2 normalization with epsilon ``eps``.",
+    ),
     "group_norm": (
         "ggml_group_norm",
         (("n_groups", _INT), ("eps", _FLOAT)),
@@ -227,6 +273,11 @@ _PARAM_OPS = {
         "Mask elements above the diagonal with ``-inf``.\n\n"
         "``n_past`` shifts the diagonal so the first ``n_past`` columns stay\n"
         "unmasked -- this is the causal attention mask for cached keys/values.",
+    ),
+    "diag_mask_zero": (
+        "ggml_diag_mask_zero",
+        (("n_past", _INT),),
+        "Mask elements above the diagonal with zero (see :meth:`diag_mask_inf`).",
     ),
     "soft_max_ext": (
         "ggml_soft_max_ext",
@@ -286,6 +337,7 @@ _PARAM_OPS = {
         (("ne0", _INT), ("ne1", _INT), ("ne2", _INT), ("ne3", _INT)),
         "Reshape to 4D.",
     ),
+    "cont_1d": ("ggml_cont_1d", (("ne0", _INT),), "Make contiguous and reshape to 1D."),
     "cont_2d": (
         "ggml_cont_2d",
         (("ne0", _INT), ("ne1", _INT)),
@@ -315,6 +367,37 @@ _PARAM_OPS = {
         "ggml_pad",
         (("p0", _INT), ("p1", _INT), ("p2", _INT), ("p3", _INT)),
         "Zero-pad each ggml dimension by the given amount.",
+    ),
+    "pad_ext": (
+        "ggml_pad_ext",
+        (
+            ("lp0", _INT), ("rp0", _INT), ("lp1", _INT), ("rp1", _INT),
+            ("lp2", _INT), ("rp2", _INT), ("lp3", _INT), ("rp3", _INT),
+        ),
+        "Zero-pad each ggml dimension on the left (``lp``) and right (``rp``).",
+    ),
+    "upscale": (
+        "ggml_upscale",
+        (("scale_factor", _INT), ("mode", _SCALE_MODE)),
+        "Upscale the first two ggml dimensions by ``scale_factor``.\n\n"
+        "``mode`` is a :class:`ScaleMode`.",
+    ),
+    "set": (
+        "ggml_set",
+        (("b", _TENSOR), ("nb1", _INT), ("nb2", _INT), ("nb3", _INT), ("offset", _INT)),
+        "Write ``b`` into a view of ``self`` with the given byte strides and offset.\n\n"
+        "Returns a view of ``self``. This is the graph op ``ggml_set``; uploading\n"
+        "host data is :meth:`write`.",
+    ),
+    "set_1d": (
+        "ggml_set_1d",
+        (("b", _TENSOR), ("offset", _INT)),
+        "Write ``b`` into ``self`` starting at byte ``offset``; returns a view of ``self``.",
+    ),
+    "set_2d": (
+        "ggml_set_2d",
+        (("b", _TENSOR), ("nb1", _INT), ("offset", _INT)),
+        "Write ``b`` into a 2D view of ``self`` with row stride ``nb1`` bytes.",
     ),
     "permute": (
         "ggml_permute",
@@ -378,6 +461,11 @@ _PARAM_OPS = {
         ),
         "2D convolution. ``self`` is the kernel and ``data`` the input.",
     ),
+    "conv_transpose_1d": (
+        "ggml_conv_transpose_1d",
+        (("data", _TENSOR), ("s0", _INT), ("p0", _INT), ("d0", _INT)),
+        "1D transposed convolution. ``self`` is the kernel and ``data`` the input.",
+    ),
     "im2col": (
         "ggml_im2col",
         (
@@ -428,7 +516,7 @@ def _check_broadcast(name: str):
     def check(self, other):
         if not _ggml.ggml_can_repeat(other.ptr, self.ptr):
             raise ValueError(
-                f"{name}: cannot broadcast other ne={other.ne4} onto ne={self.ne4}; "
+                f"{name}: cannot broadcast other ne={other.ne} onto ne={self.ne}; "
                 f"every dimension of self must be a multiple of other's"
             )
     return check
@@ -437,13 +525,13 @@ def _check_broadcast(name: str):
 def _check_repeat(self, other):
     if not _ggml.ggml_can_repeat(self.ptr, other.ptr):
         raise ValueError(
-            f"repeat: cannot tile ne={self.ne4} up to ne={other.ne4}; every "
+            f"repeat: cannot tile ne={self.ne} up to ne={other.ne}; every "
             f"dimension of other must be a multiple of self's"
         )
 
 
 def _check_mul_mat(self, other):
-    a, b = self.ne4, other.ne4
+    a, b = self.ne, other.ne
     if a[0] != b[0] or 0 in a[2:] or b[2] % a[2] or b[3] % a[3]:
         raise ValueError(
             f"mul_mat: needs a.ne[0] == b.ne[0] and b.ne[2], b.ne[3] divisible by "
@@ -463,16 +551,18 @@ def _check_reshape(self, *ne):
         )
 
 
-def _check_cpy(self, other):
-    if self.nelements != other.nelements:
-        raise ValueError(
-            f"cpy: element counts differ: {self.nelements} (ne={self.ne}) vs "
-            f"{other.nelements} (ne={other.ne})"
-        )
+def _check_cpy_like(name: str):
+    def check(self, other):
+        if self.nelements != other.nelements:
+            raise ValueError(
+                f"{name}: element counts differ: {self.nelements} (ne={self.ne}) vs "
+                f"{other.nelements} (ne={other.ne})"
+            )
+    return check
 
 
 def _check_get_rows(self, other):
-    a, b = self.ne4, other.ne4
+    a, b = self.ne, other.ne
     if other.dtype != I32:
         raise ValueError(f"get_rows: row indices must be I32, got {other.dtype.name}")
     if a[2] != b[1] or a[3] != b[2] or b[3] != 1:
@@ -489,7 +579,7 @@ def _check_concat(self, other, dim):
         raise ValueError(
             f"concat: dtypes differ: {self.dtype.name} vs {other.dtype.name}"
         )
-    a, b = self.ne4, other.ne4
+    a, b = self.ne, other.ne
     if any(a[d] != b[d] for d in range(4) if d != dim):
         raise ValueError(
             f"concat: shapes must match outside dim {dim}; got ne={a} and ne={b}"
@@ -497,6 +587,7 @@ def _check_concat(self, other, dim):
 
 
 _CHECKS = {
+    "reshape": _check_cpy_like("reshape"),
     "add": _check_broadcast("add"),
     "sub": _check_broadcast("sub"),
     "mul": _check_broadcast("mul"),
@@ -507,7 +598,7 @@ _CHECKS = {
     "reshape_2d": _check_reshape,
     "reshape_3d": _check_reshape,
     "reshape_4d": _check_reshape,
-    "cpy": _check_cpy,
+    "cpy": _check_cpy_like("cpy"),
     "get_rows": _check_get_rows,
     "concat": _check_concat,
 }
@@ -522,35 +613,49 @@ _OP_TENSORS = {
 
 
 class Tensor:
-    """A ggml tensor bound to a :class:`Context`.
+    """A ggml tensor and the :class:`Context` whose arena holds its metadata.
 
-    :attr:`ne` is the ggml-order shape ``(ne0, ne1, ...)`` (column-major-ish,
-    the reverse of numpy's row-major order).
+    :attr:`ne` is the ggml-order shape ``(ne0, ne1, ne2, ne3)`` exactly as ggml
+    stores it; :attr:`shape` is the numpy-order view of it.
 
-    ``mul_mat(a, b)`` requires ``a.ne[0] == b.ne[0]`` (the shared inner dim).
+    Op methods are sugar for the same op on :attr:`ctx`: ``a.add(b)`` is
+    ``a.ctx.add(a, b)``. To build a graph in a different context than the one
+    holding ``a`` (model weights, a KV cache), call the op on that context:
+    ``graph_ctx.mul_mat(weight, x)``.
+
+    Two wrappers of the same ``ggml_tensor`` compare equal and hash alike.
     """
 
-    __slots__ = ("ctx", "_ptr", "_owner")
+    __slots__ = ("ctx", "_ptr")
 
-    def __init__(self, ctx: "Context", ptr, *, owner: "Optional[Context]" = None):
-        # ``ctx`` is where op results land; ``owner`` is the context whose arena
-        # holds this tensor's metadata (they differ for :meth:`Context.ref`).
-        # Strong references to both keep that metadata alive.
+    def __init__(self, ctx: "Context", ptr):
         self.ctx = ctx
         self._ptr = ptr
-        self._owner = ctx if owner is None else owner
 
     @property
     def ptr(self):
         """The ``ggml_tensor *``, or :class:`GGMLError` once its context is closed.
 
         ``ggml_free`` releases the metadata of every tensor in a context, so a
-        tensor whose owning context was closed would otherwise dereference
-        freed memory.
+        tensor whose context was closed would otherwise dereference freed
+        memory.
         """
-        if self._owner.ptr is None:
+        if self.ctx._ptr is None:
             raise GGMLError("tensor used after its context was closed")
         return self._ptr
+
+    @property
+    def address(self) -> int:
+        """Address of the ``ggml_tensor`` struct (identity of the tensor)."""
+        return ctypes.cast(self._ptr, ctypes.c_void_p).value
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Tensor):
+            return NotImplemented
+        return self.address == other.address
+
+    def __hash__(self) -> int:
+        return hash(self.address)
 
     def _require_buffer(self, what: str) -> None:
         # ggml_backend_tensor_set/get abort the process on an unallocated tensor.
@@ -565,48 +670,35 @@ class Tensor:
 
     @property
     def ne(self) -> tuple:
-        """Dimensions in ggml order ``(ne0, ne1, ...)``, trailing 1s trimmed.
+        """All four dimensions in ggml order, exactly as ggml stores them.
 
-        The length follows ``ggml_n_dims``, so a ``[n, 1]`` tensor reports a
-        single dimension. Use :attr:`ne4` for the untrimmed tuple ggml actually
-        stores.
+        Unused trailing dimensions are 1, so ``t.ne[1]`` is always valid, as it
+        is in C. See :attr:`shape` for the numpy-order view.
         """
-        n = _ggml.ggml_n_dims(self.ptr)
-        return tuple(self.ptr.contents.ne[:n])
-
-    @property
-    def nb(self) -> tuple:
-        """Byte strides in ggml order, trimmed like :attr:`ne`.
-
-        Trimming drops the stride of any trailing 1-sized dimension, which is
-        exactly the stride you need to build a view over such a tensor. Use
-        :attr:`nb4` to get all four strides.
-        """
-        n = _ggml.ggml_n_dims(self.ptr)
-        return tuple(self.ptr.contents.nb[:n])
-
-    @property
-    def ne4(self) -> tuple:
-        """All four dimensions in ggml order, exactly as ggml stores them."""
         return tuple(self.ptr.contents.ne[:4])
 
     @property
-    def nb4(self) -> tuple:
+    def nb(self) -> tuple:
         """All four byte strides in ggml order, exactly as ggml stores them."""
         return tuple(self.ptr.contents.nb[:4])
 
     @property
-    def shape(self) -> tuple:
-        """Dimensions in numpy order -- :attr:`ne` reversed.
+    def n_dims(self) -> int:
+        """Number of dimensions ggml reports (``ggml_n_dims``).
 
-        The shape to allocate a download buffer for :meth:`get` with.
+        Trailing 1-sized dimensions do not count, so a ``[n, 1]`` tensor
+        reports 1.
         """
-        return tuple(reversed(self.ne))
+        return _ggml.ggml_n_dims(self.ptr)
 
     @property
-    def n_dims(self) -> int:
-        """Number of dimensions ggml reports (``ggml_n_dims``)."""
-        return _ggml.ggml_n_dims(self.ptr)
+    def shape(self) -> tuple:
+        """Dimensions in numpy order: the first :attr:`n_dims` of :attr:`ne`, reversed.
+
+        This is the shape :meth:`to_numpy` returns.
+        """
+        ptr = self.ptr
+        return tuple(reversed(ptr.contents.ne[:_ggml.ggml_n_dims(ptr)]))
 
     @property
     def dtype(self) -> "DType":
@@ -631,6 +723,28 @@ class Tensor:
         return Op(self.ptr.contents.op)
 
     @property
+    def flags(self) -> "TensorFlag":
+        """The tensor's flag bits (input, output, param, loss)."""
+        return TensorFlag(self.ptr.contents.flags)
+
+    @property
+    def src(self) -> "tuple[Tensor, ...]":
+        """The operands this tensor was computed from (empty for leaves)."""
+        srcs = self.ptr.contents.src
+        return tuple(self.ctx._adopt(p) for p in srcs if p)
+
+    @property
+    def view_src(self) -> "Optional[Tensor]":
+        """The tensor whose data this one views, or ``None``."""
+        ptr = self.ptr.contents.view_src
+        return self.ctx._adopt(ptr) if ptr else None
+
+    @property
+    def view_offs(self) -> int:
+        """Byte offset of this view into :attr:`view_src`."""
+        return self.ptr.contents.view_offs
+
+    @property
     def name(self) -> str:
         return _ggml.ggml_get_name(self.ptr).decode()
 
@@ -638,7 +752,50 @@ class Tensor:
     def name(self, value: str) -> None:
         _ggml.ggml_set_name(self.ptr, value.encode())
 
-    # -- graph I/O flags ----------------------------------------------------
+    # -- predicates (``ggml_is_*``) -----------------------------------------
+
+    @property
+    def is_contiguous(self) -> bool:
+        return bool(_ggml.ggml_is_contiguous(self.ptr))
+
+    @property
+    def is_view(self) -> bool:
+        return bool(_ggml.ggml_is_view(self.ptr))
+
+    @property
+    def is_permuted(self) -> bool:
+        return bool(_ggml.ggml_is_permuted(self.ptr))
+
+    @property
+    def is_transposed(self) -> bool:
+        return bool(_ggml.ggml_is_transposed(self.ptr))
+
+    @property
+    def is_empty(self) -> bool:
+        return bool(_ggml.ggml_is_empty(self.ptr))
+
+    @property
+    def is_scalar(self) -> bool:
+        return bool(_ggml.ggml_is_scalar(self.ptr))
+
+    @property
+    def is_vector(self) -> bool:
+        return bool(_ggml.ggml_is_vector(self.ptr))
+
+    @property
+    def is_matrix(self) -> bool:
+        return bool(_ggml.ggml_is_matrix(self.ptr))
+
+    @property
+    def is_3d(self) -> bool:
+        return bool(_ggml.ggml_is_3d(self.ptr))
+
+    @property
+    def is_quantized(self) -> bool:
+        """True when the dtype is a quantized one (``ggml_is_quantized``)."""
+        return bool(_ggml.ggml_is_quantized(self.ptr.contents.type))
+
+    # -- graph flags --------------------------------------------------------
 
     def set_input(self) -> "Tensor":
         """Mark this tensor as a graph input (``ggml_set_input``).
@@ -660,63 +817,98 @@ class Tensor:
         _ggml.ggml_set_output(self.ptr)
         return self
 
+    def set_param(self) -> "Tensor":
+        """Mark this leaf as a trainable parameter (``ggml_set_param``).
+
+        Parameters are what :meth:`Graph.build_backward_expand` computes
+        gradients for. Returns ``self``.
+        """
+        if self.op != Op.NONE:
+            raise ValueError("set_param: only leaf tensors can be parameters")
+        _ggml.ggml_set_param(self.ptr)
+        return self
+
+    def set_loss(self) -> "Tensor":
+        """Mark this scalar as the loss to differentiate (``ggml_set_loss``)."""
+        if not self.is_scalar:
+            raise ValueError(f"set_loss: the loss must be a scalar, got ne={self.ne}")
+        _ggml.ggml_set_loss(self.ptr)
+        return self
+
     # -- data transfer ------------------------------------------------------
     #
     # ggml's sync transfer (``ggml_backend_tensor_set/get``) is keyed on the
     # tensor's own buffer and takes no backend handle, so it lives here rather
     # than on Backend. The tensor must already be allocated (e.g. via
     # ``Backend.alloc_ctx_tensors``, ``GAllocr.alloc_graph``, or
-    # ``Scheduler.alloc_graph``). This is where numpy enters the wrapper.
+    # ``Scheduler.alloc_graph``). This is where numpy enters the wrapper. The
+    # methods are named ``write`` / ``read`` because ``set`` is a ggml graph op.
 
-    def set(self, x) -> None:
+    def write(self, x) -> None:
         """Upload ``x`` (any array-like, incl. a Python list) into this tensor.
 
-        ``x`` is coerced to this tensor's dtype and made contiguous; its total
-        byte size must then match the tensor's. Wraps ``ggml_backend_tensor_set``.
+        ``x`` is coerced to this tensor's dtype. It must either be flat with
+        :attr:`nelements` elements, or have this tensor's :attr:`shape`
+        (1-sized axes may be added or dropped freely). Anything else is almost
+        always a numpy-order versus ggml-order mix-up and raises
+        :class:`ValueError`. Wraps ``ggml_backend_tensor_set``.
         """
-        self._require_buffer("set")
+        self._require_buffer("write")
         arr = np.ascontiguousarray(x, dtype=dtype_to_numpy(self.dtype))
-        if arr.nbytes != self.nbytes:
+        shape = self.shape
+        if arr.size != self.nelements or (
+            arr.ndim > 1
+            and [d for d in arr.shape if d != 1] != [d for d in shape if d != 1]
+        ):
             raise ValueError(
-                f"set: source has {arr.nbytes} bytes but tensor needs "
-                f"{self.nbytes} (ne={self.ne}, dtype={self.dtype.name})"
+                f"write: source shape {arr.shape} does not match tensor shape "
+                f"{shape} (numpy order; ggml ne={self.ne})"
             )
         ptr = arr.ctypes.data_as(ctypes.c_void_p)
         _ggml.ggml_backend_tensor_set(self.ptr, ptr, 0, self.nbytes)
 
-    def set_raw(self, data, offset: int = 0) -> None:
+    def write_raw(self, data, offset: int = 0) -> None:
         """Upload raw bytes into this tensor verbatim (no dtype coercion).
 
         ``data`` is any bytes-like buffer (``bytes``, ``bytearray``,
-        ``memoryview``, ...) whose layout already matches the tensor's. Use this
-        for weights read straight from a file -- including quantized dtypes that
-        have no numpy equivalent. ``offset`` is the byte offset into the tensor.
-        Wraps ``ggml_backend_tensor_set``.
+        ``memoryview``, a numpy array, ...) whose layout already matches the
+        tensor's. Use this for weights read straight from a file -- including
+        quantized dtypes that have no numpy equivalent. ``offset`` is the byte
+        offset into the tensor. Wraps ``ggml_backend_tensor_set``.
         """
-        self._require_buffer("set_raw")
+        self._require_buffer("write_raw")
         mv = memoryview(data).cast("B")
         if offset < 0:
-            raise ValueError(f"set_raw: offset must be non-negative, got {offset}")
+            raise ValueError(f"write_raw: offset must be non-negative, got {offset}")
         if offset + mv.nbytes > self.nbytes:
             raise ValueError(
-                f"set_raw: {mv.nbytes} bytes at offset {offset} exceed tensor "
+                f"write_raw: {mv.nbytes} bytes at offset {offset} exceed tensor "
                 f"size {self.nbytes} (ne={self.ne}, dtype={self.dtype.name})"
             )
-        ptr = (ctypes.c_char * mv.nbytes).from_buffer_copy(mv)
-        _ggml.ggml_backend_tensor_set(self.ptr, ptr, offset, mv.nbytes)
+        # Borrow the caller's memory when it is a contiguous writable buffer or
+        # an immutable ``bytes``; copy only for the remaining read-only cases.
+        if isinstance(data, bytes):
+            ptr = ctypes.c_char_p(data)
+        elif mv.readonly or not mv.c_contiguous:
+            ptr = (ctypes.c_char * mv.nbytes).from_buffer_copy(mv)
+        else:
+            ptr = (ctypes.c_char * mv.nbytes).from_buffer(mv)
+        _ggml.ggml_backend_tensor_set(
+            self.ptr, ctypes.cast(ptr, ctypes.c_void_p), offset, mv.nbytes
+        )
 
-    def get(self, out: "np.ndarray") -> "np.ndarray":
+    def read(self, out: "np.ndarray") -> "np.ndarray":
         """Download this tensor into the pre-allocated, contiguous numpy array ``out``.
 
         ``out`` must be contiguous and exactly the tensor's byte size. Wraps
         ``ggml_backend_tensor_get`` and returns ``out``.
         """
-        self._require_buffer("get")
+        self._require_buffer("read")
         if not out.flags["C_CONTIGUOUS"]:
-            raise ValueError("get: out must be a C-contiguous array")
+            raise ValueError("read: out must be a C-contiguous array")
         if out.nbytes != self.nbytes:
             raise ValueError(
-                f"get: out has {out.nbytes} bytes but tensor holds "
+                f"read: out has {out.nbytes} bytes but tensor holds "
                 f"{self.nbytes} (ne={self.ne}, dtype={self.dtype.name})"
             )
         ptr = out.ctypes.data_as(ctypes.c_void_p)
@@ -727,16 +919,31 @@ class Tensor:
         """Download this tensor into a freshly allocated numpy array.
 
         Shape is :attr:`shape` (numpy order) and dtype follows this tensor's.
-        Use :meth:`get` instead to reuse a buffer or to control the layout.
+        Use :meth:`read` instead to reuse a buffer or to control the layout.
         """
-        return self.get(np.empty(self.shape, dtype=dtype_to_numpy(self.dtype)))
+        return self.read(np.empty(self.shape, dtype=dtype_to_numpy(self.dtype)))
+
+    def copy_to(self, dst: "Tensor") -> None:
+        """Copy this tensor's data into ``dst``, across backends if needed.
+
+        Both tensors must be allocated and have the same layout. Wraps
+        ``ggml_backend_tensor_copy``.
+        """
+        self._require_buffer("copy_to")
+        dst._require_buffer("copy_to")
+        if self.ne != dst.ne or self.dtype != dst.dtype:
+            raise ValueError(
+                f"copy_to: layouts differ: ne={self.ne} {self.dtype.name} vs "
+                f"ne={dst.ne} {dst.dtype.name}"
+            )
+        _ggml.ggml_backend_tensor_copy(self.ptr, dst.ptr)
 
     # -- operators ----------------------------------------------------------
     #
     # Each operator maps to exactly one ggml op; scalars go through ``scale`` /
-    # ``scale_bias``. Anything without a single matching op (``2.0 / t``, other
-    # exponents) is left unsupported rather than composed here. ``mul_mat``
-    # deliberately has no ``@``: it takes its operands transposed relative to
+    # ``scale_bias``. Anything without a single matching op (``2.0 / t``, ``**``)
+    # is left unsupported rather than composed here. ``mul_mat`` deliberately
+    # has no ``@``: it takes its operands transposed relative to
     # ``numpy.matmul``, and an infix spelling would invite exactly that confusion.
 
     def __add__(self, other) -> "Tensor":
@@ -784,16 +991,6 @@ class Tensor:
             return self.scale(1.0 / other)
         return NotImplemented
 
-    def __pow__(self, exponent) -> "Tensor":
-        """``t ** 2`` is :meth:`sqr` and ``t ** 0.5`` is :meth:`sqrt`."""
-        if not isinstance(exponent, _SCALAR):
-            return NotImplemented
-        if exponent == 2:
-            return self.sqr()
-        if exponent == 0.5:
-            return self.sqrt()
-        raise ValueError(f"ggml has no op for t ** {exponent!r}; only 2 and 0.5 are supported")
-
     def __neg__(self) -> "Tensor":
         return self.neg()
 
@@ -808,28 +1005,74 @@ class Tensor:
         return out if dtype is None else out.astype(dtype, copy=False)
 
     def __repr__(self) -> str:
-        if self._owner.ptr is None:
+        if self.ctx._ptr is None:
             return "<ggml.Tensor closed>"
         return f"<ggml.Tensor name={self.name!r} ne={self.ne} dtype={self.dtype.name}>"
 
 
-def _make_op(name: str, fn_name: str, params, doc: str):
-    """Build the :class:`Tensor` method ``name`` calling ``fn_name``.
+# -- op generation ----------------------------------------------------------------
 
-    ``params`` describes the arguments after ggml's ``ctx`` and ``a`` (which are
-    always the receiver's context and pointer): each entry is
-    ``(arg_name, kind)`` or ``(arg_name, kind, default)``, where ``kind`` is one
-    of the ``_TENSOR``/``_INT``/... constants above.
+_INPLACE_DOC = (
+    "In-place variant of :meth:`{base}`: writes the result into ``self`` and\n"
+    "returns a view of it, so anything else reading ``self`` sees the new values."
+)
+
+
+def _op_specs():
+    """Yield ``(name, fn_name, params, doc, check)`` for every op to generate.
+
+    Besides the three tables, this adds an ``<op>_inplace`` entry for each op
+    whose ``ggml_<op>_inplace`` counterpart exists in the bindings.
+    """
+    specs = []
+    for name, fn_name in _UNARY_OPS.items():
+        doc = f"Apply ``{fn_name}`` to this tensor, returning a new tensor."
+        specs.append((name, fn_name, (), doc))
+    for name, fn_name in _BINARY_OPS.items():
+        doc = f"Apply ``{fn_name}(self, other)``, returning a new tensor."
+        specs.append((name, fn_name, (("other", _TENSOR),), doc))
+    for name, (fn_name, params, doc) in _PARAM_OPS.items():
+        specs.append((name, fn_name, params, doc))
+
+    for name, fn_name, params, doc in specs:
+        yield name, fn_name, params, doc, _CHECKS.get(name)
+        if hasattr(_ggml, f"{fn_name}_inplace"):
+            yield (f"{name}_inplace", f"{fn_name}_inplace", params,
+                   _INPLACE_DOC.format(base=name), _CHECKS.get(name))
+
+
+def _make_op(name: str, fn_name: str, params, doc: str, check, *, on_context: bool):
+    """Build the method ``name`` calling ``fn_name``.
+
+    ``params`` describes the arguments after ggml's ``ctx`` and ``a``: each
+    entry is ``(arg_name, kind)`` or ``(arg_name, kind, default)``, where
+    ``kind`` is one of the ``_TENSOR``/``_INT``/... constants above.
+
+    With ``on_context`` the method goes on :class:`Context` and takes ``a``
+    explicitly (``ctx.add(a, b)``, ggml's own argument order); otherwise it goes
+    on :class:`Tensor`, ``a`` is the receiver and the target context is
+    ``self.ctx``. Either way the result lands in the target context, and the
+    target records every other context its operands live in so those stay alive
+    with it.
 
     The method body is generated as source so each op ends up with a real
     signature (keyword arguments, defaults, ``help()``) and no per-call argument
     binding overhead -- graph building calls these once per node.
     """
-    signature = ["self"]
-    call_args = ["ctx", "self.ptr"]
-    arg_names = []
+    if on_context:
+        signature = ["self", "a: Tensor"]
+        target, a = "self", "a"
+        tensors = ["a"]
+    else:
+        signature = ["self"]
+        target, a = "self.ctx", "self"
+        tensors = []
+    call_args = ["ctx", f"{a}.ptr"]
+    arg_names = [a]
+    optional = []
     namespace = {"_fn": getattr(_ggml, fn_name), "Tensor": Tensor, "GGMLError": GGMLError,
                  "DType": DType, "PoolOp": PoolOp, "RopeType": RopeType,
+                 "SortOrder": SortOrder, "ScaleMode": ScaleMode,
                  "Optional": Optional,
                  "_used_mem": _ggml.ggml_used_mem,
                  "_need": _OP_TENSORS.get(name, 1) * _ggml.ggml_tensor_overhead()}
@@ -845,45 +1088,60 @@ def _make_op(name: str, fn_name: str, params, doc: str):
             signature.append(f"{arg_name}: {annotation}")
         call_args.append(_ARG_CONV[kind].format(arg_name))
         arg_names.append(arg_name)
+        if kind == _TENSOR:
+            tensors.append(arg_name)
+        elif kind == _TENSOR_OPT:
+            optional.append(arg_name)
 
+    body = [
+        f"target = {target}",
+        "ctx = target._ptr",
+        "if ctx is None:",
+        f"    raise GGMLError('{name}: the target context is closed')",
+    ]
+    for t in tensors:
+        body += [f"if {t}.ctx is not target:", f"    target._deps.add({t}.ctx)"]
+    for t in optional:
+        body += [f"if {t} is not None and {t}.ctx is not target:",
+                 f"    target._deps.add({t}.ctx)"]
+    if check is not None:
+        namespace["_check"] = check
+        body.append(f"_check({', '.join(arg_names)})")
     # The arena check covers tensor metadata only. Ops in a ``no_alloc=False``
     # context also need room for their data, which is not known before the op
     # runs, so there it is a lower bound.
-    check = ""
-    if name in _CHECKS:
-        namespace["_check"] = _CHECKS[name]
-        check = f"    _check({', '.join(['self'] + arg_names)})\n"
-
-    source = (
-        f"def {name}({', '.join(signature)}) -> Tensor:\n"
-        f"    target = self.ctx\n"
-        f"    ctx = target.ptr\n"
-        f"    if ctx is None:\n"
-        f"        raise GGMLError('{name}: the target context is closed')\n"
-        f"{check}"
-        f"    if _used_mem(ctx) + _need > target.mem_size:\n"
-        f"        target._reserve(_need, '{name}')\n"
-        f"    return Tensor(target, _fn({', '.join(call_args)}))\n"
+    body += [
+        "if _used_mem(ctx) + _need > target.mem_size:",
+        f"    target._reserve(_need, '{name}')",
+        f"return Tensor(target, _fn({', '.join(call_args)}))",
+    ]
+    source = f"def {name}({', '.join(signature)}) -> Tensor:\n" + "".join(
+        f"    {line}\n" for line in body
     )
-    exec(compile(source, f"<ggbond op {name}>", "exec"), namespace)
+    owner = "Context" if on_context else "Tensor"
+    exec(compile(source, f"<ggbond op {owner}.{name}>", "exec"), namespace)
 
     method = namespace[name]
-    method.__qualname__ = f"Tensor.{name}"
+    method.__qualname__ = f"{owner}.{name}"
+    if on_context:
+        doc = (
+            doc.replace("(self, other)", "(a, other)")
+            .replace("``self``", "``a``")
+            .replace("to this tensor", "to ``a``")
+            .replace("this tensor", "``a``")
+            + "\n\nThe result is created in this context, whichever contexts the"
+            "\noperands live in."
+        )
     method.__doc__ = f"{doc}\n\nWraps ``{fn_name}``."
     return method
 
 
-def _install_ops() -> None:
-    for name, fn_name in _UNARY_OPS.items():
-        doc = f"Apply ``{fn_name}`` to this tensor, returning a new tensor."
-        setattr(Tensor, name, _make_op(name, fn_name, (), doc))
-
-    for name, fn_name in _BINARY_OPS.items():
-        doc = f"Apply ``{fn_name}(self, other)``, returning a new tensor."
-        setattr(Tensor, name, _make_op(name, fn_name, (("other", _TENSOR),), doc))
-
-    for name, (fn_name, params, doc) in _PARAM_OPS.items():
-        setattr(Tensor, name, _make_op(name, fn_name, params, doc))
+def install_ops(cls, *, on_context: bool) -> None:
+    """Install every generated op on ``cls`` (:class:`Tensor` or :class:`Context`)."""
+    for name, fn_name, params, doc, check in _op_specs():
+        if name in cls.__dict__:
+            raise RuntimeError(f"op {name!r} would shadow {cls.__name__}.{name}")
+        setattr(cls, name, _make_op(name, fn_name, params, doc, check, on_context=on_context))
 
 
-_install_ops()
+install_ops(Tensor, on_context=False)

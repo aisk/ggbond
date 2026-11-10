@@ -39,7 +39,7 @@ class OpShapeTests(unittest.TestCase):
             self.t(3, 4).mul_mat(self.t(5, 2))
         with self.assertRaisesRegex(ValueError, "mul_mat"):
             self.t(3, 4, 2).mul_mat(self.t(3, 2, 3))
-        self.assertEqual(self.t(3, 4).mul_mat(self.t(3, 2)).ne, (4, 2))
+        self.assertEqual(self.t(3, 4).mul_mat(self.t(3, 2)).ne, (4, 2, 1, 1))
 
     def test_reshape_checks_count_and_contiguity(self):
         with self.assertRaisesRegex(ValueError, "cannot reshape 12 elements"):
@@ -66,7 +66,7 @@ class OpShapeTests(unittest.TestCase):
             self.t(4, 2).concat(self.t(4, 2, dtype=F16), 1)
         with self.assertRaisesRegex(ValueError, "must match outside dim 1"):
             self.t(4, 2).concat(self.t(3, 2), 1)
-        self.assertEqual(self.t(4, 2).concat(self.t(4, 3), 1).ne, (4, 5))
+        self.assertEqual(self.t(4, 2).concat(self.t(4, 3), 1).ne, (4, 5, 1, 1))
 
 
 class ArenaTests(unittest.TestCase):

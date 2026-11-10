@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ctypes
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Optional
 
 import ggml as _ggml
 
 from .buffer import BufferType
 from .errors import GGMLError, check_status, nonnull
+from .handle import Handle
 
 if TYPE_CHECKING:
     from .backend import Backend
@@ -23,31 +24,27 @@ def _ptr_array(items):
     return arr
 
 
-class Scheduler:
+class Scheduler(Handle):
     """Splits a computation graph across one or more backends, allocates its
     working memory, and computes it -- the multi-backend analog of
     :class:`GAllocr` + :meth:`Backend.compute`.
 
-    The scheduler holds strong refs to its :class:`Backend` objects so they
-    outlive it (a scheduler must be freed before its backends). Closing the
-    scheduler frees only the ``ggml_backend_sched``; the backends are owned by
-    their own wrappers.
+    ``Scheduler(gpu, cpu)`` takes its backends in priority order, as
+    ``ggml_backend_sched_new`` does. The scheduler keeps them alive, and closing
+    a backend closes the scheduler first. Closing the scheduler frees only the
+    ``ggml_backend_sched``; the backends are owned by their own wrappers.
     """
 
     def __init__(
         self,
-        backends: "Sequence[Backend]",
-        *,
+        *backends: "Backend",
         bufts=None,
         graph_size: Optional[int] = None,
         parallel: bool = False,
         op_offload: bool = True,
     ):
-        backends = list(backends)
         if not backends:
             raise ValueError("Scheduler needs at least one backend")
-        if any(backend.ptr is None for backend in backends):
-            raise ValueError("Scheduler backends must be open")
         n = len(backends)
         be_arr = _ptr_array([b.ptr for b in backends])
         if bufts is None:
@@ -65,20 +62,15 @@ class Scheduler:
             graph_size = _ggml.GGML_DEFAULT_GRAPH_SIZE
         elif graph_size <= 0:
             raise ValueError(f"Scheduler graph_size must be positive, got {graph_size}")
-        self.ptr = nonnull(
+        self._ptr = nonnull(
             _ggml.ggml_backend_sched_new(
                 be_arr, buft_arr, n, graph_size, parallel, op_offload
             ),
             "ggml_backend_sched_new",
         )
         self._backends = backends
-        self._closed = False
-
-    @classmethod
-    def from_backends(cls, *backends, **kw) -> "Scheduler":
-        if len(backends) == 1 and not hasattr(backends[0], "ptr"):
-            backends = tuple(backends[0])  # a single iterable was passed
-        return cls(backends, **kw)
+        for backend in backends:
+            backend._track(self)
 
     # -- allocation ---------------------------------------------------------
 
@@ -115,10 +107,17 @@ class Scheduler:
 
     # -- queries ------------------------------------------------------------
 
-    def get_n_splits(self) -> int:
+    @property
+    def backends(self) -> "tuple[Backend, ...]":
+        """The backends this scheduler was built from, in priority order."""
+        return self._backends
+
+    @property
+    def n_splits(self) -> int:
         return _ggml.ggml_backend_sched_get_n_splits(self.ptr)
 
-    def get_n_copies(self) -> int:
+    @property
+    def n_copies(self) -> int:
         return _ggml.ggml_backend_sched_get_n_copies(self.ptr)
 
     # -- tensor backend assignment ------------------------------------------
@@ -130,8 +129,7 @@ class Scheduler:
         """Return the :class:`Backend` assigned to ``tensor``, or ``None``.
 
         The answer is one of the backends this scheduler was built from; a
-        tensor with no assignment (or one assigned to a backend the scheduler
-        does not own) yields ``None``.
+        tensor with no assignment yields ``None``.
         """
         ptr = _ggml.ggml_backend_sched_get_tensor_backend(self.ptr, tensor.ptr)
         if not ptr:
@@ -144,20 +142,6 @@ class Scheduler:
 
     # -- lifecycle ----------------------------------------------------------
 
-    def close(self) -> None:
-        if not self._closed and self.ptr is not None:
-            _ggml.ggml_backend_sched_free(self.ptr)
-            self._closed = True
-            self.ptr = None
-
-    def __enter__(self) -> "Scheduler":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+    def _free(self, ptr) -> None:
+        _ggml.ggml_backend_sched_free(ptr)
+        self._backends = ()

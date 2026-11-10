@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterator, Optional
 
 import ggml as _ggml
 
@@ -22,9 +22,13 @@ class Graph:
     """A computation graph backed by an external :class:`Context`.
 
     Following ggml, ``ggml_new_graph`` needs a context to allocate the graph
-    structure; the graph holds (and keeps alive) the context that also owns its
-    nodes. A graph has no independent ``close()`` -- its memory is released when
-    the backing context is freed.
+    structure; the graph holds (and keeps alive) that context. A graph has no
+    independent ``close()`` -- its memory is released when the backing context
+    is freed.
+
+    As in ggml, the graph keeps two lists: :meth:`nodes` are the tensors to
+    compute (ops and parameters), :meth:`leafs` the constants and inputs they
+    read. Iterating the graph or calling ``len`` on it walks the nodes.
     """
 
     def __init__(self, ctx: "Context", *, size: Optional[int] = None, grads: bool = False):
@@ -41,18 +45,59 @@ class Graph:
                 ctx.ptr, size or _ggml.GGML_DEFAULT_GRAPH_SIZE, grads
             )
         self._ptr = nonnull(ptr, "ggml_new_graph")
+        self.grads = grads
 
     @property
     def ptr(self):
         """The ``ggml_cgraph *``, or :class:`GGMLError` once its context is closed."""
-        if self.ctx.ptr is None:
+        if self.ctx._ptr is None:
             raise GGMLError("graph used after its context was closed")
         return self._ptr
 
+    # -- building -----------------------------------------------------------
+
     def build_forward_expand(self, tensor: Tensor) -> "Graph":
         """Add ``tensor`` (and its dependencies) to the forward graph."""
+        if tensor.ctx is not self.ctx:
+            self.ctx._deps.add(tensor.ctx)
         _ggml.ggml_build_forward_expand(self.ptr, tensor.ptr)
         return self
+
+    def build_backward_expand(self) -> "Graph":
+        """Add the backward pass to this graph (``ggml_build_backward_expand``).
+
+        The graph must have been created with ``grads=True`` and already hold
+        the forward pass of a tensor marked with :meth:`Tensor.set_loss`, built
+        from leaves marked with :meth:`Tensor.set_param`. Gradient tensors are
+        created in the backing context, so size it for them; call :meth:`reset`
+        after allocating and before each compute, then read gradients with
+        :meth:`get_grad`.
+        """
+        if not self.grads:
+            raise GGMLError("build_backward_expand: create the graph with grads=True")
+        _ggml.ggml_build_backward_expand(self.ctx.ptr, self.ptr, None)
+        return self
+
+    def get_grad(self, tensor: Tensor) -> Optional[Tensor]:
+        """Return the gradient of ``tensor`` in this graph, or ``None``."""
+        if not self.grads:
+            return None
+        ptr = _ggml.ggml_graph_get_grad(self.ptr, tensor.ptr)
+        return self.ctx._adopt(ptr) if ptr else None
+
+    def reset(self) -> None:
+        """Zero the gradients and seed the loss gradient (``ggml_graph_reset``).
+
+        Needs the graph's tensors to be allocated already.
+        """
+        if self.grads:
+            _ggml.ggml_graph_reset(self.ptr)
+
+    def clear(self) -> None:
+        """Remove every node and leaf so the graph can be rebuilt (``ggml_graph_clear``)."""
+        _ggml.ggml_graph_clear(self.ptr)
+
+    # -- compute ------------------------------------------------------------
 
     def compute_with_ctx(self, n_threads: int = 1) -> None:
         """Compute on the CPU using the backing context's memory.
@@ -63,20 +108,49 @@ class Graph:
         status = _ggml.ggml_graph_compute_with_ctx(self.ctx.ptr, self.ptr, n_threads)
         check_status(status, "ggml_graph_compute_with_ctx")
 
-    # -- node access (no dedicated bindings; read the struct fields) --------
+    # -- node access (read from the struct fields) --------------------------
+    #
+    # A graph may reference tensors living in other contexts, so wrappers are
+    # resolved to the context that really owns each tensor (Context._adopt).
+
+    @property
+    def size(self) -> int:
+        """Node capacity the graph was created with (``ggml_graph_size``)."""
+        return self.ptr.contents.size
 
     @property
     def n_nodes(self) -> int:
         return self.ptr.contents.n_nodes
 
+    @property
+    def n_leafs(self) -> int:
+        return self.ptr.contents.n_leafs
+
     def node(self, i: int) -> Tensor:
-        if not (0 <= i < self.n_nodes):
+        """Return node ``i``; negative indices count from the end, as in ggml."""
+        n = self.n_nodes
+        if not (-n <= i < n):
             raise IndexError(i)
-        return Tensor(self.ctx, self.ptr.contents.nodes[i])
+        return self.ctx._adopt(self.ptr.contents.nodes[i % n])
+
+    def leaf(self, i: int) -> Tensor:
+        n = self.n_leafs
+        if not (0 <= i < n):
+            raise IndexError(i)
+        return self.ctx._adopt(self.ptr.contents.leafs[i])
+
+    def nodes(self) -> Iterator[Tensor]:
+        """Iterate over the nodes, in evaluation order."""
+        return (self.node(i) for i in range(self.n_nodes))
+
+    def leafs(self) -> Iterator[Tensor]:
+        """Iterate over the leafs (constants and inputs)."""
+        return (self.leaf(i) for i in range(self.n_leafs))
 
     def get_tensor(self, name: str) -> Optional[Tensor]:
+        """Return the node or leaf named ``name``, or ``None`` (``ggml_graph_get_tensor``)."""
         ptr = _ggml.ggml_graph_get_tensor(self.ptr, name.encode())
-        return Tensor(self.ctx, ptr) if ptr else None
+        return self.ctx._adopt(ptr) if ptr else None
 
     # -- debugging ----------------------------------------------------------
 
@@ -100,5 +174,10 @@ class Graph:
     def __len__(self) -> int:
         return self.n_nodes
 
-    def __iter__(self):
-        return (self.node(i) for i in range(self.n_nodes))
+    def __iter__(self) -> Iterator[Tensor]:
+        return self.nodes()
+
+    def __repr__(self) -> str:
+        if self.ctx._ptr is None:
+            return "<ggml.Graph closed>"
+        return f"<ggml.Graph n_nodes={self.n_nodes} n_leafs={self.n_leafs}>"

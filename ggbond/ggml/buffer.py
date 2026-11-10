@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Optional
+
 import ggml as _ggml
 
 from .errors import nonnull
+from .handle import Handle
+
+if TYPE_CHECKING:
+    from .backend import Backend
 
 
 class BufferType:
     """A ``ggml_backend_buffer_type_t``: where a backend allocates from.
 
-    Obtained from :meth:`Backend.buffer_type`; passed to :class:`GAllocr` and to
+    Obtained from :attr:`Backend.buffer_type`; passed to :class:`GAllocr` and to
     :class:`Scheduler`. Buffer types are owned by their backend, so this wrapper
     holds no lifetime of its own.
     """
@@ -28,25 +34,25 @@ class BufferType:
         return f"<ggml.BufferType name={self.name!r}>"
 
 
-class Buffer:
+class Buffer(Handle):
     """Backend memory holding tensor data (``ggml_backend_buffer_t``).
 
-    Returned by :meth:`Backend.alloc_ctx_tensors`. A buffer's lifetime is
-    independent of the backend that allocated it: by default the allocating
-    :class:`Backend` frees it on close, but you can take ownership by calling
-    :meth:`release`, after which closing the buffer (or its ``with`` block) is
-    what frees it.
+    Returned by :meth:`Backend.alloc_ctx_tensors`. As in ggml, a buffer is its
+    own resource: :meth:`close` (or its ``with`` block, or garbage collection)
+    frees it with ``ggml_backend_buffer_free``.
+
+    You rarely need to manage one by hand. The :class:`Context` whose tensors
+    it holds keeps the buffer alive, the buffer keeps its :class:`Backend`
+    alive, and a backend that is closed explicitly closes its buffers first.
     """
 
-    def __init__(self, ptr, *, owner=None):
-        self.ptr = nonnull(ptr, "ggml_backend_buffer_t")
-        # The Backend that will free this buffer, or None once released.
-        self._owner = owner
-        # The allocating Backend, kept alive for as long as this buffer is: the
-        # backend frees its buffers on close, so it must not be collected while
-        # tensors still point into one.
-        self._backend = owner
-        self._closed = False
+    def __init__(self, ptr, *, backend: "Optional[Backend]" = None):
+        self._ptr = nonnull(ptr, "ggml_backend_buffer_t")
+        # Kept alive for as long as this buffer is: a buffer must be freed
+        # before the backend it was allocated from.
+        self._backend = backend
+        if backend is not None:
+            backend._track(self)
 
     # -- queries ------------------------------------------------------------
 
@@ -73,6 +79,7 @@ class Buffer:
         """True when the data is directly addressable by the CPU."""
         return bool(_ggml.ggml_backend_buffer_is_host(self.ptr))
 
+    @property
     def buffer_type(self) -> "BufferType":
         return BufferType(_ggml.ggml_backend_buffer_get_type(self.ptr))
 
@@ -84,43 +91,11 @@ class Buffer:
 
     # -- lifecycle ----------------------------------------------------------
 
-    def release(self) -> "Buffer":
-        """Take ownership from the allocating backend, returning ``self``.
-
-        After this the buffer is freed by :meth:`close` (or its ``with`` block)
-        rather than when the backend closes. The buffer must still be freed
-        before the backend it came from.
-        """
-        if self._owner is not None:
-            self._owner.disown_buffer(self)
-            self._owner = None
-        return self
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._owner is not None:
-            # Still backend-owned; let the backend free it in its own close().
-            self.ptr = None
-            return
-        if self.ptr is not None:
-            _ggml.ggml_backend_buffer_free(self.ptr)
-            self.ptr = None
-
-    def __enter__(self) -> "Buffer":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+    def _free(self, ptr) -> None:
+        _ggml.ggml_backend_buffer_free(ptr)
+        self._backend = None
 
     def __repr__(self) -> str:
-        if self.ptr is None:
+        if self.closed:
             return "<ggml.Buffer closed>"
         return f"<ggml.Buffer name={self.name!r} size={self.size}>"

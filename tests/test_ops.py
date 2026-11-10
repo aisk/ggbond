@@ -3,7 +3,11 @@ import unittest
 
 import numpy as np
 
-from ggbond.ggml import Backend, Context, F32, GAllocr, I32, ROPE_TYPE_NEOX, Tensor
+import ggml as _ggml
+
+from ggbond.ggml import (
+    Backend, Context, F32, GAllocr, I32, Op, RopeType, ScaleMode, SortOrder, Tensor,
+)
 
 
 def compute(build):
@@ -18,7 +22,7 @@ def compute(build):
             tensor.set_output()
         backend.alloc_ctx_tensors(ctx)
         for tensor, value in uploads.items():
-            tensor.set(value)
+            tensor.write(value)
 
         graph = ctx.new_graph()
         for tensor in outputs:
@@ -27,10 +31,7 @@ def compute(build):
             allocator.alloc_graph(graph)
             backend.compute(graph)
 
-        return [
-            tensor.get(np.empty(tensor.shape, dtype=np.float32))
-            for tensor in outputs
-        ]
+        return [tensor.to_numpy() for tensor in outputs]
 
 
 class GeneratedOpTests(unittest.TestCase):
@@ -81,7 +82,7 @@ class GeneratedOpTests(unittest.TestCase):
         def build(ctx):
             a = ctx.new_tensor_3d(F32, 8, 1, 1).set_input()
             positions = ctx.new_tensor_1d(I32, 1).set_input()
-            rotated = a.rope(positions, 8, ROPE_TYPE_NEOX)
+            rotated = a.rope(positions, 8, RopeType.NEOX)
             return {a: source, positions: np.zeros(1, dtype=np.int32)}, [rotated]
 
         (result,) = compute(build)
@@ -100,7 +101,115 @@ class GeneratedOpTests(unittest.TestCase):
         np.testing.assert_allclose(result.reshape(-1), source[8:16])
 
 
+    def test_rounding_and_cumulative_ops(self):
+        source = np.array([[-1.5, 0.25, 2.75], [3.5, -0.5, 1.0]], dtype=np.float32)
+
+        def build(ctx):
+            a = ctx.new_tensor_2d(F32, 3, 2).set_input()
+            return {a: source}, [a.floor(), a.ceil(), a.sgn(), a.cumsum(), a.cont_1d(6)]
+
+        floor, ceil, sgn, cumsum, flat = compute(build)
+        np.testing.assert_array_equal(floor, np.floor(source))
+        np.testing.assert_array_equal(ceil, np.ceil(source))
+        np.testing.assert_array_equal(sgn, np.sign(source))
+        np.testing.assert_allclose(cumsum, np.cumsum(source, axis=1))
+        np.testing.assert_array_equal(flat, source.reshape(-1))
+
+    def test_argsort_arange_and_upscale(self):
+        source = np.array([[3.0, 1.0, 2.0]], dtype=np.float32)
+
+        def build(ctx):
+            a = ctx.new_tensor_2d(F32, 3, 1).set_input()
+            image = ctx.new_tensor_4d(F32, 3, 1, 1, 1).set_input()
+            return {a: source, image: source}, [
+                ctx.arange(1, 7, 2),
+                image.upscale(2, ScaleMode.NEAREST),
+                a.argsort(SortOrder.DESC),
+            ]
+
+        with Backend.cpu_init() as backend, Context(1 << 22, no_alloc=True) as ctx:
+            uploads, (steps, upscaled, order) = build(ctx)
+            graph = ctx.new_graph()
+            for tensor in (steps, upscaled, order):
+                graph.build_forward_expand(tensor.set_output())
+            self.assertIs(order.dtype, I32)
+            with GAllocr.from_backend(backend) as allocator:
+                allocator.alloc_graph(graph)
+                for tensor, value in uploads.items():
+                    tensor.write(value)
+                backend.compute(graph)
+
+                np.testing.assert_array_equal(steps.to_numpy(), [1, 3, 5])
+                np.testing.assert_array_equal(
+                    upscaled.to_numpy().reshape(2, 6), [[3, 3, 1, 1, 2, 2]] * 2
+                )
+                np.testing.assert_array_equal(order.to_numpy(), [0, 2, 1])
+
+    def test_inplace_ops_write_into_their_operand(self):
+        source = np.array([1.0, -2.0, 3.0], dtype=np.float32)
+
+        def build(ctx):
+            a = ctx.new_tensor_1d(F32, 3).set_input()
+            doubled = a.scale(2.0)
+            negated = doubled.neg_inplace()
+            self.assertEqual(negated.view_src, doubled)
+            return {a: source}, [negated, doubled]
+
+        negated, doubled = compute(build)
+        np.testing.assert_array_equal(negated, -2 * source)
+        np.testing.assert_array_equal(doubled, -2 * source)
+
+    def test_set_1d_writes_into_a_view(self):
+        def build(ctx):
+            a = ctx.new_tensor_1d(F32, 4).set_input()
+            b = ctx.new_tensor_1d(F32, 2).set_input()
+            updated = a.dup().set_1d(b, 1 * a.element_size)
+            return {a: np.zeros(4, np.float32), b: np.array([5, 6], np.float32)}, [updated]
+
+        (updated,) = compute(build)
+        np.testing.assert_array_equal(updated, [0, 5, 6, 0])
+
+    def test_reshape_like_another_tensor(self):
+        with Context(1 << 20, no_alloc=True) as ctx:
+            a = ctx.new_tensor_2d(F32, 4, 3)
+
+            self.assertEqual(a.reshape(ctx.new_tensor_2d(F32, 6, 2)).ne, (6, 2, 1, 1))
+            with self.assertRaisesRegex(ValueError, "reshape: element counts differ"):
+                a.reshape(ctx.new_tensor_1d(F32, 5))
+            with self.assertRaisesRegex(ValueError, "empty range"):
+                ctx.arange(3, 1)
+
+
 class OpGenerationTests(unittest.TestCase):
+    def test_every_op_exists_on_both_tensor_and_context(self):
+        from ggbond.ggml.tensor import _op_specs
+
+        names = [name for name, *_ in _op_specs()]
+        self.assertEqual(len(names), len(set(names)))
+        for name, fn_name, params, *_ in _op_specs():
+            with self.subTest(op=name):
+                on_tensor = list(inspect.signature(getattr(Tensor, name)).parameters)
+                on_context = list(inspect.signature(getattr(Context, name)).parameters)
+                self.assertEqual(on_context, ["self", "a"] + on_tensor[1:])
+                # The tables must describe every argument after ggml's ctx and a.
+                binding = inspect.signature(getattr(_ggml, fn_name)).parameters
+                self.assertEqual(len(binding), 2 + len(params))
+
+    def test_inplace_variants_are_generated_from_the_bindings(self):
+        self.assertTrue(hasattr(Tensor, "add_inplace"))
+        self.assertTrue(hasattr(Context, "rope_ext_inplace"))
+        # ggml has no ggml_mul_mat_inplace, so neither do we.
+        self.assertFalse(hasattr(Tensor, "mul_mat_inplace"))
+        self.assertIn("returns a view", Tensor.add_inplace.__doc__)
+
+    def test_context_form_documents_ggml_argument_order(self):
+        parameters = inspect.signature(Context.conv_1d).parameters
+
+        self.assertEqual(list(parameters), ["self", "a", "data", "s0", "p0", "d0"])
+        self.assertIn("``a`` is the kernel", Context.conv_1d.__doc__)
+        with Context(1 << 20, no_alloc=True) as ctx:
+            self.assertIs(ctx.sqr(ctx.new_tensor_1d(F32, 2)).op, Op.SQR)
+
     def test_generated_methods_keep_a_real_signature(self):
         parameters = inspect.signature(Tensor.view_2d).parameters
 

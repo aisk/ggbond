@@ -83,7 +83,7 @@ class Magika:
                 if t is None:
                     raise ValueError(f"GGUF tensor metadata is missing '{name}'")
                 f.seek(self._gguf.data_offset + self._gguf.get_tensor_offset(i))
-                t.set_raw(_read_exact(f, t.nbytes, f"tensor '{name}' data"))
+                t.write_raw(_read_exact(f, t.nbytes, f"tensor '{name}' data"))
         self._weights = {
             self._gguf.get_tensor_name(i): self._gguf.context.get_tensor(
                 self._gguf.get_tensor_name(i)
@@ -102,15 +102,15 @@ class Magika:
         # Weights live in self._gguf.context (already allocated). Inputs and
         # intermediates live in this compute context; GAllocr allocates them.
         with Context(mem_size=1 << 20, no_alloc=True) as ctx:
-            # Rebind weights to this context so op-result nodes land here, not in
-            # the GGUF metadata context (which is sized only for the weights). The
-            # ggml_tensor pointers are shared; a graph may span both contexts.
-            w = {name: ctx.ref(t) for name, t in self._weights.items()}
+            # Ops whose first operand is a weight go through ``ctx`` so their
+            # results land here, not in the GGUF metadata context (which is
+            # sized only for the weights). A graph may span both contexts.
+            w = self._weights
 
             inp = ctx.new_tensor_3d(F32, 257, self.INP_BYTES, n_files, name="input").set_input()
 
             # dense
-            cur = w["dense/kernel:0"].mul_mat(inp).add(w["dense/bias:0"]).gelu()
+            cur = ctx.mul_mat(w["dense/kernel:0"], inp).add(w["dense/bias:0"]).gelu()
 
             # reshape + transpose
             cur = cur.reshape_3d(512, 384, n_files).transpose().cont()
@@ -119,10 +119,10 @@ class Magika:
             cur = cur.norm(eps=self.F_NORM_EPS).mul(w["layer_normalization/gamma:0"]).add(w["layer_normalization/beta:0"])
 
             # dense_1
-            cur = w["dense_1/kernel:0"].mul_mat(cur.transpose().cont()).add(w["dense_1/bias:0"]).gelu()
+            cur = ctx.mul_mat(w["dense_1/kernel:0"], cur.transpose().cont()).add(w["dense_1/bias:0"]).gelu()
 
             # dense_2
-            cur = w["dense_2/kernel:0"].mul_mat(cur).add(w["dense_2/bias:0"]).gelu()
+            cur = ctx.mul_mat(w["dense_2/kernel:0"], cur).add(w["dense_2/bias:0"]).gelu()
 
             # global_max_pooling1d
             cur = cur.transpose().cont().pool_1d(PoolOp.MAX, 384, 384, 0).reshape_2d(256, n_files)
@@ -131,13 +131,13 @@ class Magika:
             cur = cur.norm(eps=self.F_NORM_EPS).mul(w["layer_normalization_1/gamma:0"]).add(w["layer_normalization_1/beta:0"])
 
             # target_label
-            out = w["target_label/kernel:0"].mul_mat(cur).add(w["target_label/bias:0"]).soft_max()
+            out = ctx.mul_mat(w["target_label/kernel:0"], cur).add(w["target_label/bias:0"]).soft_max()
             out.set_output()
 
             graph = ctx.new_graph().build_forward_expand(out)
             with GAllocr.from_backend(self._backend) as alloc:
                 alloc.alloc_graph(graph)
-                inp.set(input_data.reshape(n_files, self.INP_BYTES, 257))
+                inp.write(input_data.reshape(n_files, self.INP_BYTES, 257))
                 self._backend.compute(graph)
                 all_probs = out.to_numpy().reshape(n_files, self.N_LABEL)
 

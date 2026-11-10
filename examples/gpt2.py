@@ -317,13 +317,13 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
 
             if tensor.nelements != nelements:
                 raise ValueError(f"tensor '{name}' has wrong size in model file")
-            te = tensor.ne
-            if te[0] != ne[0] or (len(te) > 1 and te[1] != ne[1]):
+            if list(tensor.ne[:2]) != ne:
                 raise ValueError(
-                    f"tensor '{name}' has wrong shape: got {list(te)}, expected {ne[:n_dims]}"
+                    f"tensor '{name}' has wrong shape: got {ne[:n_dims]}, "
+                    f"expected {list(tensor.ne[:n_dims])}"
                 )
 
-            tensor.set_raw(_read_exact(f, tensor.nbytes, f"tensor '{name}' data"))
+            tensor.write_raw(_read_exact(f, tensor.nbytes, f"tensor '{name}' data"))
             loaded_names.add(name)
 
             # GPT-2 ties the LM head to the token embedding (wte) unless the file
@@ -359,12 +359,12 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
     hp = model.hparams
     n_embd, n_layer, n_ctx, n_head = hp.n_embd, hp.n_layer, hp.n_ctx, hp.n_head
 
-    # Rebind weight/KV tensors to this graph's context so op-result nodes land
-    # here (the weight context is sized only for weight metadata).
-    R = ctx.ref
-
-    memory_k = R(model.memory_k)
-    memory_v = R(model.memory_v)
+    # Weights and the KV cache live in the model's own contexts, which are
+    # sized only for their metadata. Ops whose first operand is one of them go
+    # through ``ctx`` (``ctx.mul_mat(w, x)`` is ``ggml_mul_mat(ctx, w, x)``) so
+    # the result nodes land in this graph's context.
+    memory_k = model.memory_k
+    memory_v = model.memory_v
     k_esz = memory_k.element_size  # bytes per element (F32 -> 4)
 
     graph = ctx.new_graph(size=GPT2_MAX_NODES)
@@ -373,27 +373,27 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
     position = ctx.new_tensor_1d(I32, N, name="position").set_input()
 
     # wte + wpe
-    inpL = R(model.wte).get_rows(embd).add(R(model.wpe).get_rows(position))
+    inpL = ctx.get_rows(model.wte, embd).add(ctx.get_rows(model.wpe, position))
 
     for il in range(n_layer):
         layer = model.layers[il]
 
         # ln_1
-        cur = inpL.norm(hp.eps).mul(R(layer.ln_1_g)).add(R(layer.ln_1_b))
+        cur = inpL.norm(hp.eps).mul(layer.ln_1_g).add(layer.ln_1_b)
 
         # attention: fused QKV projection -> [3*n_embd, N]
-        cur = R(layer.c_attn_attn_w).mul_mat(cur).add(R(layer.c_attn_attn_b))
+        cur = ctx.mul_mat(layer.c_attn_attn_w, cur).add(layer.c_attn_attn_b)
 
         # row stride of the contiguous [3*n_embd, N] QKV tensor
-        nb1 = cur.nb4[1]
+        nb1 = cur.nb[1]
         Qcur = cur.view_2d(n_embd, N, nb1, 0 * 4 * n_embd)
         Kcur = cur.view_2d(n_embd, N, nb1, 1 * 4 * n_embd)
         Vcur = cur.view_2d(n_embd, N, nb1, 2 * 4 * n_embd)
 
         # store the new keys/values into the KV cache
         if N >= 1:
-            k = memory_k.view_1d(N * n_embd, k_esz * n_embd * (il * n_ctx + n_past))
-            v = memory_v.view_1d(N * n_embd, k_esz * n_embd * (il * n_ctx + n_past))
+            k = ctx.view_1d(memory_k, N * n_embd, k_esz * n_embd * (il * n_ctx + n_past))
+            v = ctx.view_1d(memory_v, N * n_embd, k_esz * n_embd * (il * n_ctx + n_past))
             graph.build_forward_expand(Kcur.cpy(k))
             graph.build_forward_expand(Vcur.cpy(v))
 
@@ -402,7 +402,7 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
 
         # K = [64, n_past + N, 12]
         K = (
-            memory_k.view_1d((n_past + N) * n_embd, il * n_ctx * k_esz * n_embd)
+            ctx.view_1d(memory_k, (n_past + N) * n_embd, il * n_ctx * k_esz * n_embd)
             .reshape_3d(n_embd // n_head, n_head, n_past + N)
             .permute(0, 2, 1, 3)
         )
@@ -415,7 +415,7 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
 
         # V^T = [n_past + N, 64, 12]
         V_trans = (
-            memory_v.view_1d((n_past + N) * n_embd, il * n_ctx * k_esz * n_embd)
+            ctx.view_1d(memory_v, (n_past + N) * n_embd, il * n_ctx * k_esz * n_embd)
             .reshape_3d(n_embd // n_head, n_head, n_past + N)
             .permute(1, 2, 0, 3)
             .cont_3d(n_past + N, n_embd // n_head, n_head)
@@ -425,25 +425,25 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
         cur = KQV.permute(0, 2, 1, 3).cont_2d(n_embd, N)
 
         # attention output projection
-        cur = R(layer.c_attn_proj_w).mul_mat(cur).add(R(layer.c_attn_proj_b))
+        cur = ctx.mul_mat(layer.c_attn_proj_w, cur).add(layer.c_attn_proj_b)
 
         # residual
         cur = cur.add(inpL)
         inpFF = cur
 
         # ln_2 + MLP
-        cur = inpFF.norm(hp.eps).mul(R(layer.ln_2_g)).add(R(layer.ln_2_b))
-        cur = R(layer.c_mlp_fc_w).mul_mat(cur).add(R(layer.c_mlp_fc_b)).gelu()
-        cur = R(layer.c_mlp_proj_w).mul_mat(cur).add(R(layer.c_mlp_proj_b))
+        cur = inpFF.norm(hp.eps).mul(layer.ln_2_g).add(layer.ln_2_b)
+        cur = ctx.mul_mat(layer.c_mlp_fc_w, cur).add(layer.c_mlp_fc_b).gelu()
+        cur = ctx.mul_mat(layer.c_mlp_proj_w, cur).add(layer.c_mlp_proj_b)
 
         # residual
         inpL = cur.add(inpFF)
 
     # final norm
-    inpL = inpL.norm(hp.eps).mul(R(model.ln_f_g)).add(R(model.ln_f_b))
+    inpL = inpL.norm(hp.eps).mul(model.ln_f_g).add(model.ln_f_b)
 
     # logits = lm_head * inpL
-    logits = R(model.lm_head).mul_mat(inpL)
+    logits = ctx.mul_mat(model.lm_head, inpL)
     logits.name = "logits"
     logits.set_output()
 
@@ -464,15 +464,14 @@ def gpt2_eval(model, backend, allocr, n_past, embd_inp) -> np.ndarray:
 
         allocr.alloc_graph(graph)
 
-        embd.set(np.asarray(embd_inp, dtype=np.int32))
-        position.set(np.arange(n_past, n_past + N, dtype=np.int32))
+        embd.write(np.asarray(embd_inp, dtype=np.int32))
+        position.write(np.arange(n_past, n_past + N, dtype=np.int32))
 
         backend.compute(graph)
 
         # logits hold [n_vocab, N] row-major (n_vocab fastest); return just the
         # last token's row, mirroring the C++ which reads that slice directly.
-        flat = logits.get(np.empty(logits.nelements, dtype=np.float32))
-        return flat[(N - 1) * n_vocab: N * n_vocab].copy()
+        return logits.to_numpy().reshape(N, n_vocab)[N - 1].copy()
 
 
 # ============================================================================

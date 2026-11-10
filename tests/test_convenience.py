@@ -12,7 +12,7 @@ def evaluate(build):
         output.set_output()
         backend.alloc_ctx_tensors(ctx)
         for tensor, value in uploads.items():
-            tensor.set(value)
+            tensor.write(value)
         graph = ctx.new_graph().build_forward_expand(output)
         with GAllocr.from_backend(backend) as allocator:
             allocator.alloc_graph(graph)
@@ -89,14 +89,6 @@ class OperatorTests(unittest.TestCase):
             self.run_operator(lambda a, b: 1.5 - a), 1.5 - self.left
         )
 
-    def test_power_maps_to_sqr_and_sqrt(self):
-        np.testing.assert_allclose(
-            self.run_operator(lambda a, b: a ** 2), self.left ** 2
-        )
-        np.testing.assert_allclose(
-            self.run_operator(lambda a, b: a ** 0.5), np.sqrt(self.left), rtol=1e-6
-        )
-
     def test_transpose_property(self):
         np.testing.assert_allclose(
             self.run_operator(lambda a, b: a.T.cont()), self.left.T
@@ -109,14 +101,14 @@ class OperatorTests(unittest.TestCase):
                 a + "x"
             with self.assertRaises(TypeError):
                 2.0 / a
-            with self.assertRaises(ValueError):
-                a ** 3
+            with self.assertRaises(TypeError):
+                a ** 2
 
     def test_numpy_array_protocol(self):
         with Backend.cpu_init() as backend, Context(1 << 20, no_alloc=True) as ctx:
             a = ctx.new_tensor_2d(F32, 3, 2)
             backend.alloc_ctx_tensors(ctx)
-            a.set(self.left)
+            a.write(self.left)
             np.testing.assert_array_equal(np.asarray(a), self.left)
             self.assertEqual(np.asarray(a, dtype=np.float64).dtype, np.float64)
 

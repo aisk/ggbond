@@ -4,9 +4,6 @@ from enum import IntEnum
 import ggml as _ggml
 
 from ggbond.ggml import (
-    DEVICE_CPU,
-    POOL_MAX,
-    ROPE_TYPE_NEOX,
     Backend,
     Context,
     Device,
@@ -19,7 +16,6 @@ from ggbond.ggml import (
     PoolOp,
     RopeType,
 )
-from ggbond.ggml.gguf import TYPE_STRING
 
 
 class EnumTests(unittest.TestCase):
@@ -33,12 +29,6 @@ class EnumTests(unittest.TestCase):
         self.assertEqual(DeviceType.GPU, _ggml.GGML_BACKEND_DEVICE_TYPE_GPU)
         self.assertEqual(GGUFType.FLOAT64, _ggml.GGUF_TYPE_FLOAT64)
         self.assertNotIn("COUNT", Op.__members__)
-
-    def test_module_constants_are_enum_members(self):
-        self.assertIs(POOL_MAX, PoolOp.MAX)
-        self.assertIs(ROPE_TYPE_NEOX, RopeType.NEOX)
-        self.assertIs(DEVICE_CPU, DeviceType.CPU)
-        self.assertIs(TYPE_STRING, GGUFType.STRING)
 
     def test_tensor_op_reports_an_op(self):
         with Context(1 << 20, no_alloc=True) as ctx:
@@ -60,7 +50,7 @@ class EnumTests(unittest.TestCase):
         self.assertIs(cpu.type, DeviceType.CPU)
         with Backend.init_by_type(DeviceType.CPU) as backend:
             self.assertTrue(backend.is_cpu)
-            self.assertEqual(backend.kind, "cpu")
+            self.assertIs(backend.device.type, DeviceType.CPU)
 
     def test_gguf_types_are_enums(self):
         with GGUF.init_empty() as gguf:

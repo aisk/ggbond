@@ -8,13 +8,14 @@ import ggml as _ggml
 
 from .buffer import BufferType
 from .errors import GGMLError, nonnull
+from .handle import Handle
 
 if TYPE_CHECKING:
     from .backend import Backend
     from .graph import Graph
 
 
-class GAllocr:
+class GAllocr(Handle):
     """Allocates the working memory for a computation graph from a backend
     buffer type. Use :meth:`reserve` to pre-compute the requirement, then
     :meth:`alloc_graph` before computing.
@@ -31,12 +32,20 @@ class GAllocr:
         """
         if isinstance(buffer_type, BufferType):
             buffer_type = buffer_type.ptr
-        self.ptr = nonnull(_ggml.ggml_gallocr_new(buffer_type), "ggml_gallocr_new")
-        self._closed = False
+        self._ptr = nonnull(_ggml.ggml_gallocr_new(buffer_type), "ggml_gallocr_new")
+        self._backend = None
 
     @classmethod
     def from_backend(cls, backend: "Backend") -> "GAllocr":
-        return cls(backend.buffer_type())
+        """Create an allocator on ``backend``'s default buffer type.
+
+        The allocator keeps the backend alive, and closing the backend closes
+        the allocator first.
+        """
+        self = cls(backend.buffer_type)
+        self._backend = backend
+        backend._track(self)
+        return self
 
     def reserve(self, graph: "Graph") -> None:
         if not _ggml.ggml_gallocr_reserve(self.ptr, graph.ptr):
@@ -49,20 +58,6 @@ class GAllocr:
     def buffer_size(self, buffer_id: int = 0) -> int:
         return _ggml.ggml_gallocr_get_buffer_size(self.ptr, buffer_id)
 
-    def close(self) -> None:
-        if not self._closed and self.ptr is not None:
-            _ggml.ggml_gallocr_free(self.ptr)
-            self._closed = True
-            self.ptr = None
-
-    def __enter__(self) -> "GAllocr":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+    def _free(self, ptr) -> None:
+        _ggml.ggml_gallocr_free(ptr)
+        self._backend = None

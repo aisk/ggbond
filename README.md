@@ -43,8 +43,8 @@ with Backend.cpu_init() as backend, Context(1 << 20, no_alloc=True) as ctx:
     graph = ctx.new_graph().build_forward_expand(out)
     with GAllocr.from_backend(backend) as allocator:
         allocator.alloc_graph(graph)
-        ta.set(a)
-        tb.set(b)
+        ta.write(a)
+        tb.write(b)
         backend.compute(graph)
 
         result = out.to_numpy()
@@ -59,6 +59,12 @@ exposes `__version__`.
 
 - Tensor dimensions are in GGML order `(ne0, ne1, ...)`, the reverse of a
   conventional NumPy shape. Use `*reversed(array.shape)` when creating tensors.
+  `Tensor.ne` is the four dimensions GGML stores; `Tensor.shape` is the NumPy
+  view of them.
+- Every op exists twice: `ctx.mul_mat(a, b)` is `ggml_mul_mat(ctx, a, b)` with
+  the target context explicit, and `a.mul_mat(b)` is sugar for
+  `a.ctx.mul_mat(a, b)`. Use the context form when the first operand lives in
+  another context, such as model weights.
 - For two NumPy matrices whose rows share the same inner dimension,
   `ta.mul_mat(tb)` computes `b @ a.T`.
 - Mark graph inputs and outputs with `set_input()` and `set_output()` before
@@ -67,20 +73,26 @@ exposes `__version__`.
   from it. Prefer context managers.
 - `GGUF.close()` only closes the GGUF metadata handle. Its `.context` is owned
   separately and must also be closed.
-- `Tensor.set()` and `Tensor.get()` require allocated tensor storage. Use
-  `set_raw()` for quantized or otherwise non-NumPy weight data.
+- `Tensor.write()`, `read()` and `to_numpy()` require allocated tensor
+  storage. `write()` checks the array against `Tensor.shape`; use `write_raw()`
+  for quantized or otherwise non-NumPy weight data.
+- Every wrapper that owns a native handle raises `GGMLError` once closed.
+  Closing a `Backend` first closes the buffers, allocators and schedulers built
+  on it.
 
 ## Main classes
 
 | Class | Purpose |
 | --- | --- |
-| `Context` | Owns GGML tensor and graph metadata |
+| `Context` | Owns GGML tensor and graph metadata; every op as `ctx.op(a, ...)` |
 | `Tensor` | Wraps a tensor pointer and exposes GGML operations and transfers |
 | `Graph` | Builds and inspects a computation graph |
-| `Backend` | Owns a CPU/CUDA/Metal/HIP backend and context buffers |
+| `Backend` | A CPU/CUDA/Metal/HIP backend handle |
+| `Buffer` | Backend memory holding a context's tensor data |
+| `Device` | An entry of the backend device registry |
 | `GAllocr` | Allocates a graph on one backend |
 | `Scheduler` | Allocates and computes a graph across multiple backends |
-| `GGUF` | Reads GGUF metadata and tensor offsets |
+| `GGUF` | Reads and writes GGUF metadata and tensor entries |
 
 ## Examples
 

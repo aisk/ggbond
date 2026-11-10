@@ -50,19 +50,6 @@ class NamError(RuntimeError):
 
 
 # ============================================================================
-# Raw ggml-tensor dims (``.ne`` / ``.nb`` truncate trailing 1-dims via
-# ggml_n_dims, which loses the channel axis for 1-channel tensors here).
-# ============================================================================
-
-def _ne(t: Tensor, i: int) -> int:
-    return int(t.ptr.contents.ne[i])
-
-
-def _nb(t: Tensor, i: int) -> int:
-    return int(t.ptr.contents.nb[i])
-
-
-# ============================================================================
 # Graph-side ops
 # ============================================================================
 
@@ -74,11 +61,13 @@ def conv1d(ctx: Context, kernel: Tensor, x: Tensor, dilation: int = 1) -> Tensor
     Mirrors ``ggml_conv_1d`` but with an F32 im2col so F32 kernels are kept.
     """
     # (kernel, data, s0=1, s1, p0, p1, d0=dilation, d1, is_2d, dst_type)
-    im = kernel.im2col(x, 1, 0, 0, 0, dilation, 0, False, F32)  # ne = (IC*K, OL, N)
-    ick, ol, n = _ne(im, 0), _ne(im, 1), _ne(im, 2)
-    k, ic, oc = _ne(kernel, 0), _ne(kernel, 1), _ne(kernel, 2)
+    # ``kernel`` is a weight living in the model's context, so these ops go
+    # through ``ctx`` to land in the graph context.
+    im = ctx.im2col(kernel, x, 1, 0, 0, 0, dilation, 0, False, F32)  # ne = (IC*K, OL, N)
+    ick, ol, n = im.ne[0], im.ne[1], im.ne[2]
+    k, ic, oc = kernel.ne[0], kernel.ne[1], kernel.ne[2]
     im2 = im.reshape_2d(ick, n * ol)
-    k2 = kernel.reshape_2d(k * ic, oc)
+    k2 = ctx.reshape_2d(kernel, k * ic, oc)
     return im2.mul_mat(k2).reshape_3d(ol, oc, n)  # (OL, OC, N=1)
 
 
@@ -88,13 +77,13 @@ def slice_tail(ctx: Context, t: Tensor, n: int) -> Tensor:
     Right-aligned trim used everywhere NAM writes ``x[:, :, -n:]``. Returns a
     contiguous copy so it can feed the next convolution.
     """
-    length, channels = _ne(t, 0), _ne(t, 1)
+    length, channels = t.ne[0], t.ne[1]
     if n == length:
         return t
     if n > length:
         raise NamError(f"slice_tail: want {n} frames but tensor has {length}")
-    off = (length - n) * _nb(t, 0)
-    return t.view_2d(n, channels, _nb(t, 1), off).cont()
+    off = (length - n) * t.nb[0]
+    return t.view_2d(n, channels, t.nb[1], off).cont()
 
 
 def _act(t: Tensor, name: str) -> Tensor:
@@ -115,9 +104,9 @@ def apply_activation(ctx: Context, z: Tensor, spec: dict) -> Tensor:
     axis in half and return ``primary(first) * secondary(second)``."""
     if spec["kind"] == "plain":
         return _act(z, spec["primary"])
-    length, mid = _ne(z, 0), _ne(z, 1)
+    length, mid = z.ne[0], z.ne[1]
     half = mid // 2
-    nb1 = _nb(z, 1)
+    nb1 = z.nb[1]
     a = z.view_2d(length, half, nb1, 0).cont()
     b = z.view_2d(length, half, nb1, half * nb1).cont()
     return _act(a, spec["primary"]).mul(_act(b, spec["secondary"]))
@@ -287,7 +276,7 @@ def load_model(path: str, backend: Backend) -> NamModel:
     def take(t: Tensor) -> None:
         nonlocal off
         n = t.nelements
-        t.set(weights[off:off + n])
+        t.write(weights[off:off + n])
         off += n
 
     for arr in model.arrays:
@@ -312,53 +301,51 @@ def load_model(path: str, backend: Backend) -> NamModel:
 # Forward graph
 # ============================================================================
 
-def _layer_forward(ctx, R, layer, x, cond, out_length):
+def _layer_forward(ctx, layer, x, cond, out_length):
     """One WaveNet layer. Returns (residual, head_term)."""
     dil = layer["dilation"]
-    zconv = conv1d(ctx, R(layer["conv_w"]), x, dil).add(R(layer["conv_b"]))
-    mix = conv1d(ctx, R(layer["mix_w"]), cond, 1)
-    mix = slice_tail(ctx, mix, _ne(zconv, 0))
+    zconv = conv1d(ctx, layer["conv_w"], x, dil).add(layer["conv_b"])
+    mix = conv1d(ctx, layer["mix_w"], cond, 1)
+    mix = slice_tail(ctx, mix, zconv.ne[0])
     z = zconv.add(mix)
     post = apply_activation(ctx, z, layer["act"])
 
-    layer_out = conv1d(ctx, R(layer["l1x1_w"]), post, 1).add(R(layer["l1x1_b"]))
+    layer_out = conv1d(ctx, layer["l1x1_w"], post, 1).add(layer["l1x1_b"])
     head_term = slice_tail(ctx, post, out_length)
-    residual = slice_tail(ctx, x, _ne(layer_out, 0)).add(layer_out)
+    residual = slice_tail(ctx, x, layer_out.ne[0]).add(layer_out)
     return residual, head_term
 
 
-def _array_forward(ctx, R, arr, y, cond, head_input):
+def _array_forward(ctx, arr, y, cond, head_input):
     """One layer array. Returns (head_output, layer_output)."""
     m = arr["meta"]
     rf = 1 + sum((k - 1) * d for k, d in zip(m["kernel_sizes"], m["dilations"]))
-    out_length = min(_ne(y, 0), _ne(cond, 0)) - (rf - 1)
+    out_length = min(y.ne[0], cond.ne[0]) - (rf - 1)
     if out_length <= 0:
         raise NamError("input is shorter than the model receptive field")
 
-    x = conv1d(ctx, R(arr["rechannel"]), y, 1)
+    x = conv1d(ctx, arr["rechannel"], y, 1)
     for layer in arr["layers"]:
-        x, head_term = _layer_forward(ctx, R, layer, x, cond, out_length)
+        x, head_term = _layer_forward(ctx, layer, x, cond, out_length)
         if head_input is None:
             head_input = head_term
         else:
             head_input = slice_tail(ctx, head_input, out_length).add(head_term)
 
-    head_out = conv1d(ctx, R(arr["head_w"]), head_input, 1)
+    head_out = conv1d(ctx, arr["head_w"], head_input, 1)
     if arr["head_b"] is not None:
-        head_out = head_out.add(R(arr["head_b"]))
+        head_out = head_out.add(arr["head_b"])
     return head_out, slice_tail(ctx, x, out_length)
 
 
 def build_graph(model: NamModel, ctx: Context, n_samples: int):
     """Build the full forward graph in ``ctx``. Returns (graph, inp, out)."""
-    R = ctx.ref  # rebind a weight tensor onto this graph's context
-
     inp = ctx.new_tensor_2d(F32, n_samples, 1, name="input").set_input()
     cond = inp
     y = inp
     head_input = None
     for arr in model.arrays:
-        head_input, y = _array_forward(ctx, R, arr, y, cond, head_input)
+        head_input, y = _array_forward(ctx, arr, y, cond, head_input)
 
     out = head_input.scale(model.head_scale)
     out.name = "output"
@@ -376,9 +363,9 @@ def run_offline(model: NamModel, backend: Backend, audio: np.ndarray) -> np.ndar
         graph, inp, out = build_graph(model, ctx, n)
         with GAllocr.from_backend(backend) as alloc:
             alloc.alloc_graph(graph)
-            inp.set(x.reshape(n, 1))
+            inp.write(x.reshape(n, 1))
             backend.compute(graph)
-            y = out.get(np.empty(out.nelements, dtype=np.float32))
+            y = out.to_numpy().reshape(-1)
 
     if y.size != audio.size:  # guard against off-by-one padding
         y = y[-audio.size:]

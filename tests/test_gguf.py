@@ -5,7 +5,8 @@ import unittest
 import numpy as np
 
 from ggbond.ggml import Context, F32, GGMLError, GGUF
-from ggbond.ggml.gguf import TYPE_INT32, type_name
+from ggbond.ggml import GGUFType
+from ggbond.ggml.gguf import type_name
 
 
 class GGUFRoundTripTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class GGUFRoundTripTests(unittest.TestCase):
                 writer.set_val_str("general.architecture", "demo")
                 writer.set_val_u32("demo.block_count", 7)
                 writer.set_val_bool("demo.flag", True)
-                writer.set_arr_data("demo.dims", TYPE_INT32, [3, 5, 7])
+                writer.set_arr_data("demo.dims", GGUFType.INT32, [3, 5, 7])
                 writer.set_arr_str("demo.names", ["a", "bb"])
                 writer.add_tensor(tensor)
                 writer.set_tensor_data("w", weights.tobytes())
@@ -48,6 +49,25 @@ class GGUFRoundTripTests(unittest.TestCase):
             self.addCleanup(gguf.context.close)
 
             self.assertEqual(len(list(gguf.items())), gguf.n_kv)
+            self.assertEqual(dict(gguf.items())["demo.block_count"], 7)
+
+    def test_metadata_reads_like_a_mapping(self):
+        self.write()
+
+        with GGUF.from_file(self.path) as gguf:
+            self.addCleanup(gguf.context.close)
+
+            self.assertEqual(gguf["general.architecture"], "demo")
+            self.assertIn("demo.flag", gguf)
+            self.assertNotIn("demo.missing", gguf)
+            self.assertEqual(gguf.get("demo.missing", 3), 3)
+            self.assertEqual(gguf.get("demo.block_count"), 7)
+            with self.assertRaises(KeyError):
+                gguf["demo.missing"]
+            with self.assertRaises(TypeError):
+                gguf[0]
+            # The context ggml filled in reports its own no_alloc setting.
+            self.assertTrue(gguf.context.no_alloc)
             self.assertEqual(list(gguf.keys())[0], "general.architecture")
 
     def test_tensor_entry_is_written(self):
@@ -81,7 +101,7 @@ class GGUFRoundTripTests(unittest.TestCase):
 
 class GGUFTypeNameTests(unittest.TestCase):
     def test_type_name_decodes(self):
-        self.assertEqual(type_name(TYPE_INT32), "i32")
+        self.assertEqual(type_name(GGUFType.INT32), "i32")
 
 
 if __name__ == "__main__":

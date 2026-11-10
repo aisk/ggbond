@@ -87,6 +87,7 @@ class Device:
         _ggml.ggml_backend_dev_memory(self.ptr, ctypes.byref(free), ctypes.byref(total))
         return free.value, total.value
 
+    @property
     def buffer_type(self) -> "BufferType":
         return BufferType(_ggml.ggml_backend_dev_buffer_type(self.ptr))
 
@@ -97,8 +98,7 @@ class Device:
         from .backend import Backend
 
         return Backend(
-            nonnull(_ggml.ggml_backend_dev_init(self.ptr, params), "ggml_backend_dev_init"),
-            kind=self.name,
+            nonnull(_ggml.ggml_backend_dev_init(self.ptr, params), "ggml_backend_dev_init")
         )
 
     def __repr__(self) -> str:

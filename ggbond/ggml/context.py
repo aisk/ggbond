@@ -8,8 +8,9 @@ from typing import Optional
 import ggml as _ggml
 
 from .errors import GGMLError, nonnull
-from .types import DType
-from .tensor import Tensor
+from .handle import Handle
+from .types import DType, F32
+from .tensor import Tensor, install_ops
 from .graph import Graph, graph_overhead_custom
 
 
@@ -22,9 +23,14 @@ def tensor_overhead() -> int:
     return _ggml.ggml_tensor_overhead()
 
 
-class Context:
+class Context(Handle):
     """Owns a ``ggml_context``: the arena that holds tensor metadata (and,
     when ``no_alloc=False``, tensor data).
+
+    Every ggml op is a method here, with the same argument order as C:
+    ``ctx.mul_mat(a, b)`` is ``ggml_mul_mat(ctx, a, b)`` and the result lands in
+    this context whichever contexts ``a`` and ``b`` live in. ``a.mul_mat(b)`` on
+    :class:`Tensor` is sugar for ``a.ctx.mul_mat(a, b)``.
 
     ``mem_size`` (bytes) is the size of that arena, passed straight to
     ``ggml_init_params``. Size it for the tensor metadata and graphs you will
@@ -33,7 +39,8 @@ class Context:
 
     A :class:`Context` must outlive every :class:`Tensor` / :class:`Graph` it
     produces, because ``ggml_free`` releases all of their metadata at once.
-    Tensors hold a strong reference back to their context to enforce this.
+    Tensors hold a strong reference back to their context to enforce this, and
+    a context keeps alive every other context its ops read tensors from.
     """
 
     def __init__(
@@ -44,17 +51,22 @@ class Context:
         mem_buffer=None,
     ):
         params = _ggml.ggml_init_params(mem_size, mem_buffer, no_alloc)
-        self.ptr = nonnull(_ggml.ggml_init(params), "ggml_init")
-        self.mem_size = _ggml.ggml_get_mem_size(self.ptr)
         # ggml borrows external arena memory for the entire context lifetime.
         # Retain the object passed by the caller so ctypes-owned buffers are not
         # garbage-collected while the native context still points into them.
+        self._adopt_ptr(nonnull(_ggml.ggml_init(params), "ggml_init"), True, mem_buffer)
+
+    def _adopt_ptr(self, ptr, owns: bool, mem_buffer=None) -> None:
+        self._ptr = ptr
+        self.mem_size = _ggml.ggml_get_mem_size(ptr)
+        self.no_alloc = bool(_ggml.ggml_get_no_alloc(ptr))
         self._mem_buffer = mem_buffer
-        self.no_alloc = no_alloc
-        self._owns = True
-        self._closed = False
-        # Backend buffers holding this context's tensor data (see retain_buffer).
+        self._owns = owns
+        # Backend buffers holding this context's tensor data, kept alive with it
+        # (appended by Backend.alloc_ctx_tensors).
         self._buffers = []
+        # Other contexts whose tensors the ops built here read.
+        self._deps = set()
 
     @classmethod
     def for_tensors(
@@ -86,7 +98,7 @@ class Context:
         return cls(mem_size, no_alloc=True)
 
     @classmethod
-    def from_ptr(cls, ptr, *, no_alloc: bool = True, owns: bool = True) -> "Context":
+    def from_ptr(cls, ptr, *, owns: bool = True) -> "Context":
         """Wrap an externally created ``ggml_context``.
 
         Used for contexts allocated outside this class (e.g. the metadata
@@ -95,23 +107,8 @@ class Context:
         lifetime is managed elsewhere.
         """
         self = cls.__new__(cls)
-        self.ptr = nonnull(ptr, "ggml_context")
-        self.mem_size = _ggml.ggml_get_mem_size(self.ptr)
-        self._mem_buffer = None
-        self.no_alloc = no_alloc
-        self._owns = owns
-        self._closed = False
-        self._buffers = []
+        self._adopt_ptr(nonnull(ptr, "ggml_context"), owns)
         return self
-
-    def retain_buffer(self, buffer) -> None:
-        """Keep ``buffer`` (and through it, its backend) alive with this context.
-
-        Called by :meth:`Backend.alloc_ctx_tensors`, so the memory behind this
-        context's tensors cannot be garbage-collected while the tensors are
-        still reachable.
-        """
-        self._buffers.append(buffer)
 
     # -- arena accounting ---------------------------------------------------
     #
@@ -121,15 +118,10 @@ class Context:
     @property
     def used_mem(self) -> int:
         """Bytes of the arena already in use (``ggml_used_mem``)."""
-        return _ggml.ggml_used_mem(self._live_ptr("used_mem"))
-
-    def _live_ptr(self, what: str):
-        if self.ptr is None:
-            raise GGMLError(f"{what}: the context is closed")
-        return self.ptr
+        return _ggml.ggml_used_mem(self.ptr)
 
     def _reserve(self, nbytes: int, what: str) -> None:
-        used = _ggml.ggml_used_mem(self._live_ptr(what))
+        used = _ggml.ggml_used_mem(self.ptr)
         if used + nbytes > self.mem_size:
             raise GGMLError(
                 f"{what}: context out of memory: needs {nbytes} bytes but only "
@@ -187,6 +179,19 @@ class Context:
             _ggml.ggml_new_tensor(self.ptr, int(dtype), len(ne), dims), name
         )
 
+    def arange(self, start: float, stop: float, step: float = 1.0) -> Tensor:
+        """Create an F32 tensor holding ``start, start + step, ...`` below ``stop``.
+
+        Wraps ``ggml_arange``.
+        """
+        if step == 0 or (stop - start) / step <= 0:
+            raise ValueError(f"arange: empty range ({start}, {stop}, {step})")
+        steps = -(-(stop - start) // step)
+        self._reserve_new_tensor(F32, (int(steps),))
+        return self._new_tensor(
+            _ggml.ggml_arange(self.ptr, float(start), float(stop), float(step)), None
+        )
+
     # -- tensor lookup ------------------------------------------------------
     #
     # ggml stores every tensor created in a context in an internal list. These
@@ -218,17 +223,28 @@ class Context:
             yield cur
             cur = self.next_tensor(cur)
 
-    def ref(self, tensor: Tensor) -> Tensor:
-        """Return ``tensor`` rebound to this context, sharing its ``ggml_tensor``.
+    def _adopt(self, ptr) -> Tensor:
+        """Wrap a raw ``ggml_tensor *`` reached through this context's graphs.
 
-        Op methods allocate their result in the receiver's context, so a graph
-        built here that reads a tensor created elsewhere (model weights, a KV
-        cache) must go through this first, or the result nodes would land in the
-        weight context and exhaust it. The underlying ``ggml_tensor`` is shared,
-        not copied, and a graph may freely span both contexts as long as both
-        outlive it.
+        A graph built here may contain tensors living in other contexts
+        (weights, caches). The wrapper must point at the context that really
+        owns the metadata so the use-after-close guard works, so this looks up
+        which known arena contains the address.
         """
-        return Tensor(self, tensor.ptr, owner=tensor._owner)
+        address = ctypes.cast(ptr, ctypes.c_void_p).value
+        seen, stack = set(), [self]
+        while stack:
+            ctx = stack.pop()
+            if ctx in seen or ctx._ptr is None:
+                continue
+            seen.add(ctx)
+            base = _ggml.ggml_get_mem_buffer(ctx._ptr)
+            if base is not None and base <= address < base + ctx.mem_size:
+                return Tensor(ctx, ptr)
+            stack.extend(ctx._deps)
+        raise GGMLError(
+            "tensor belongs to a context that is closed or unknown to this one"
+        )
 
     # -- graph factory ------------------------------------------------------
 
@@ -238,23 +254,12 @@ class Context:
 
     # -- lifecycle ----------------------------------------------------------
 
-    def close(self) -> None:
-        if not self._closed and self.ptr is not None:
-            if self._owns:
-                _ggml.ggml_free(self.ptr)
-            self._closed = True
-            self.ptr = None
-            self._mem_buffer = None
-            self._buffers = []
+    def _free(self, ptr) -> None:
+        if self._owns:
+            _ggml.ggml_free(ptr)
+        self._mem_buffer = None
+        self._buffers = []
+        self._deps = set()
 
-    def __enter__(self) -> "Context":
-        return self
 
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+install_ops(Context, on_context=True)
