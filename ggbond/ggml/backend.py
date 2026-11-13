@@ -176,12 +176,16 @@ class Backend(Handle):
 
         ggml synchronizes before returning, so results can be read right away.
         """
-        status = _ggml.ggml_backend_graph_compute(self.ptr, graph.ptr)
+        ptr = self.ptr
+        graph._check_allocated("compute")
+        status = _ggml.ggml_backend_graph_compute(ptr, graph.ptr)
         check_status(status, "ggml_backend_graph_compute")
 
     def compute_async(self, graph: "Graph") -> None:
         """Start computing ``graph``; call :meth:`synchronize` before reading results."""
-        status = _ggml.ggml_backend_graph_compute_async(self.ptr, graph.ptr)
+        ptr = self.ptr
+        graph._check_allocated("compute_async")
+        status = _ggml.ggml_backend_graph_compute_async(ptr, graph.ptr)
         check_status(status, "ggml_backend_graph_compute_async")
 
     def synchronize(self) -> None:

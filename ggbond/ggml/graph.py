@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import struct
 from typing import TYPE_CHECKING, Iterator, Optional
 
 import ggml as _ggml
@@ -11,6 +13,9 @@ from .tensor import Tensor
 
 if TYPE_CHECKING:
     from .context import Context
+
+
+_POINTER_SIZE = ctypes.sizeof(ctypes.c_void_p)
 
 
 def graph_overhead_custom(size: int, grads: bool = False) -> int:
@@ -104,6 +109,29 @@ class Graph:
 
     # -- compute ------------------------------------------------------------
 
+    def _check_allocated(self, what: str) -> None:
+        """Raise unless every node has memory to be computed into.
+
+        ggml dereferences the data pointers without looking, so computing a
+        graph that was never allocated, or whose allocator has since moved on
+        to another graph or closed, would crash the process.
+        """
+        cgraph = self.ptr.contents
+        n = cgraph.n_nodes
+        if n <= 0:
+            return
+        base = ctypes.cast(cgraph.nodes, ctypes.c_void_p).value
+        tensor_at = _ggml.ggml_tensor.from_address
+        for address in struct.unpack(f"{n}P", ctypes.string_at(base, n * _POINTER_SIZE)):
+            tensor = tensor_at(address)
+            if not tensor.data:
+                name = bytes(tensor.name).split(b"\0", 1)[0].decode(errors="replace")
+                raise GGMLError(
+                    f"{what}: graph tensor {name!r} is not allocated. Allocate "
+                    "the graph first (GAllocr.alloc_graph); a graph loses its "
+                    "memory when its allocator allocates another graph or closes"
+                )
+
     def compute_with_ctx(self, n_threads: int = 1) -> None:
         """Compute on the CPU using the backing context's memory.
 
@@ -154,7 +182,22 @@ class Graph:
 
     def get_tensor(self, name: str) -> Optional[Tensor]:
         """Return the node or leaf named ``name``, or ``None`` (``ggml_graph_get_tensor``)."""
-        ptr = _ggml.ggml_graph_get_tensor(self.ptr, name.encode())
+        cgraph = self.ptr
+        # ggml compares names by reading every tensor of the graph, including
+        # those of other contexts, which must therefore still exist.
+        seen, stack = set(), list(self.ctx._deps)
+        while stack:
+            ctx = stack.pop()
+            if ctx in seen:
+                continue
+            seen.add(ctx)
+            if ctx._ptr is None:
+                raise GGMLError(
+                    "get_tensor: the graph reads tensors of a context that is "
+                    "closed or unknown to this one"
+                )
+            stack.extend(ctx._deps)
+        ptr = _ggml.ggml_graph_get_tensor(cgraph, name.encode())
         return self.ctx._adopt(ptr) if ptr else None
 
     # -- debugging ----------------------------------------------------------
