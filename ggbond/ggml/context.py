@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import operator
 from typing import Optional
 
 import ggml as _ggml
@@ -150,6 +151,20 @@ class Context(Handle, ContextOps):
             )
 
     def _reserve_new_tensor(self, dtype: "DType", ne) -> None:
+        # ggml asserts the type and trusts the dimensions.
+        try:
+            DType(dtype)
+        except ValueError:
+            raise ValueError(f"new_tensor: {dtype!r} is not a tensor type") from None
+        for n in ne:
+            try:
+                n = operator.index(n)
+            except TypeError:
+                raise TypeError(
+                    f"new_tensor: dimensions must be integers, got {n!r}"
+                ) from None
+            if n < 0:
+                raise ValueError(f"new_tensor: negative dimension in ne={tuple(ne)}")
         nbytes = tensor_overhead()
         if not self.no_alloc:
             data = _ggml.ggml_row_size(int(dtype), ne[0])

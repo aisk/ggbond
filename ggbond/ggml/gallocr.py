@@ -43,8 +43,9 @@ class GraphAllocator(Handle):
     memory stops being theirs, which is
 
     * right before ggml is asked to allocate a *different* graph (another
-      graph, or the same one after nodes were added to it), since the new graph
-      is laid out over the same memory;
+      graph, or the same one after nodes were added to it or a tensor was
+      marked as input or output), since the new graph is laid out over the
+      same memory;
     * when a larger ``reserve()`` regrows the buffers;
     * on ``close()``.
 
@@ -77,6 +78,8 @@ class GraphAllocator(Handle):
         # (weak context, epoch, [tensor address, ...]).
         self._key = None
         self._held = None
+        # The request ggml last computed a layout for: (key, spanned contexts).
+        self._plan = None
         self._sizes = None
         self._addresses = set()
         _ALLOCATORS.add(self)
@@ -99,15 +102,21 @@ class GraphAllocator(Handle):
 
     @staticmethod
     def _key_of(graph: "Graph") -> tuple:
-        """What tells one allocation request from another: the ``ggml_cgraph``
-        and the exact node and leaf pointers it lists.
+        """What tells one allocation request from another: the ``ggml_cgraph``,
+        the exact node and leaf pointers it lists, and their flags.
         """
         cgraph = graph.ptr.contents
-        return (
-            address_of(graph.ptr),
-            _pointers(cgraph.nodes, cgraph.n_nodes),
-            _pointers(cgraph.leafs, cgraph.n_leafs),
+        nodes = _pointers(cgraph.nodes, cgraph.n_nodes)
+        leafs = _pointers(cgraph.leafs, cgraph.n_leafs)
+        # The flags decide the layout too: ggml computes in place over a tensor
+        # unless it is marked as an output.
+        tensor_at = _TENSOR.from_address
+        flags = tuple(
+            tensor_at(address).flags
+            for raw in (nodes, leafs)
+            for address in struct.unpack(f"{len(raw) // _POINTER_SIZE}P", raw)
         )
+        return (address_of(graph.ptr), nodes, leafs, flags)
 
     def _snapshot(self, key: tuple, graph: "Graph") -> list:
         """Group the tensors of ``graph`` living in this allocator's buffers
@@ -124,7 +133,7 @@ class GraphAllocator(Handle):
                 arenas.append((base, base + ctx.mem_size, tensors))
         own = self._addresses
         if own:
-            for raw in key[1:]:
+            for raw in key[1:3]:
                 for address in struct.unpack(f"{len(raw) // _POINTER_SIZE}P", raw):
                     if _TENSOR.from_address(address).buffer in own:
                         for low, high, tensors in arenas:
@@ -169,10 +178,37 @@ class GraphAllocator(Handle):
         self._addresses = set()
         self._sizes = None
 
-    def _reserved(self) -> None:
-        """Call after a reserve: a grown buffer invalidates what lived in the old one."""
+    def _reserved(self, graph: "Graph") -> None:
+        """Call after a reserve of ``graph``: ggml now holds a layout for it,
+        and a grown buffer invalidates what lived in the old one.
+        """
+        self._plan = (
+            self._key_of(graph),
+            [(weakref.ref(ctx), epoch) for ctx, epoch in self._spanned(graph)],
+        )
         if self._sizes is not None and self._buffer_sizes() != self._sizes:
             self._release()
+
+    def _planned(self, graph: "Graph") -> bool:
+        """Whether ggml's current layout was computed for exactly ``graph``.
+
+        ggml only recomputes its layout when the node count or a tensor size
+        differs from the graph it planned last. Another graph of the same
+        shape, or the same graph with other tensors marked as outputs, would
+        be laid out with the old plan, which may reuse the memory of a tensor
+        that is now wanted as a result. Subclasses therefore reserve first
+        whenever this is false.
+        """
+        if self._plan is None:
+            return False
+        key, spanned = self._plan
+        if key != self._key_of(graph):
+            return False
+        for ref, epoch in spanned:
+            ctx = ref()
+            if ctx is None or epoch is None or ctx._epoch is not epoch:
+                return False
+        return True
 
     def _allocating(self, graph: "Graph") -> None:
         """Call before asking ggml to allocate ``graph``.
@@ -281,12 +317,18 @@ class GAllocr(GraphAllocator):
     def reserve(self, graph: "Graph") -> None:
         if not _ggml.ggml_gallocr_reserve(self.ptr, graph.ptr):
             raise GGMLError("ggml_gallocr_reserve failed")
-        self._reserved()
+        self._reserved(graph)
 
     def alloc_graph(self, graph: "Graph") -> None:
-        """Allocate the tensors of ``graph``, which replaces the graph allocated before."""
+        """Allocate the tensors of ``graph``, which replaces the graph allocated before.
+
+        The layout is always computed for this very graph: unless it was
+        reserved already, it is reserved first (see ``_planned``).
+        """
         ptr = self.ptr
         self._allocating(graph)
+        if not self._planned(graph):
+            self.reserve(graph)
         if not _ggml.ggml_gallocr_alloc_graph(ptr, graph.ptr):
             raise GGMLError("ggml_gallocr_alloc_graph failed")
         self._allocated(graph)

@@ -158,7 +158,7 @@ class Scheduler(GraphAllocator):
         if not _ggml.ggml_backend_sched_reserve(self.ptr, graph.ptr):
             raise GGMLError("ggml_backend_sched_reserve failed")
         self._current = None
-        self._reserved()
+        self._reserved(graph)
 
     def alloc_graph(self, graph: "Graph") -> None:
         """Split ``graph`` across the backends and allocate its tensors.
@@ -172,6 +172,9 @@ class Scheduler(GraphAllocator):
                 "call reset() first"
             )
         self._allocating(graph)
+        if not self._planned(graph):
+            # ggml would lay a graph of the same shape out with its last plan.
+            self.reserve(graph)
         if not _ggml.ggml_backend_sched_alloc_graph(self.ptr, graph.ptr):
             raise GGMLError("ggml_backend_sched_alloc_graph failed")
         self._current = weakref.ref(graph)
@@ -202,6 +205,8 @@ class Scheduler(GraphAllocator):
         if not allocated:
             self._check_fits(graph, what)
             self._allocating(graph)
+            if not self._planned(graph):
+                self.reserve(graph)
         status = function(self.ptr, graph.ptr)
         if not allocated and status != _ggml.GGML_STATUS_ALLOC_FAILED:
             # ggml allocated the graph itself.

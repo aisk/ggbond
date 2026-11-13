@@ -547,6 +547,76 @@ class BufferInvalidationTests(unittest.TestCase):
                     view.to_numpy()
 
 
+class OutputFlagTests(unittest.TestCase):
+    """Marking another tensor as output asks for a new layout of the same graph."""
+
+    def test_a_tensor_marked_output_later_is_not_computed_over(self):
+        with Backend.cpu_init() as backend, \
+                Context(1 << 20, no_alloc=True) as ctx, \
+                GAllocr.from_backend(backend) as allocator:
+            x = ctx.new_tensor_1d(F32, 4).set_input()
+            hidden = x.scale(2.0)
+            out = hidden.scale_bias(1.0, 1.0).set_output()
+            graph = ctx.new_graph().build_forward_expand(out)
+
+            allocator.alloc_graph(graph)
+            x.write(np.ones(4, np.float32))
+            backend.compute(graph)
+            np.testing.assert_allclose(out.to_numpy(), 3.0)
+
+            # ggml keeps a tensor that still has data where it is, and there
+            # ``out`` was computed in place over ``hidden``.
+            hidden.set_output()
+            allocator.reserve(graph)
+            allocator.alloc_graph(graph)
+            x.write(np.ones(4, np.float32))
+            backend.compute(graph)
+            np.testing.assert_allclose(hidden.to_numpy(), 2.0)
+            np.testing.assert_allclose(out.to_numpy(), 3.0)
+
+    def _rerun_with_another_output(self, allocator, compute, reset):
+        with Context(1 << 20, no_alloc=True) as ctx:
+            x = ctx.new_tensor_1d(F32, 4).set_input()
+            hidden = x.scale(2.0)
+            out = hidden.scale_bias(1.0, 1.0).set_output()
+            graph = ctx.new_graph().build_forward_expand(out)
+            for mark in (False, True):
+                if mark:
+                    hidden.set_output()
+                reset()
+                allocator.alloc_graph(graph)  # no reserve: the wrapper plans afresh
+                x.write(np.ones(4, np.float32))
+                compute(graph)
+                np.testing.assert_allclose(out.to_numpy(), 3.0)
+            np.testing.assert_allclose(hidden.to_numpy(), 2.0)
+
+    def test_alloc_graph_alone_lays_the_changed_request_out_afresh(self):
+        with Backend.cpu_init() as backend:
+            with GAllocr.from_backend(backend) as allocator:
+                self._rerun_with_another_output(allocator, backend.compute, lambda: None)
+            with Scheduler(backend) as sched:
+                self._rerun_with_another_output(sched, sched.compute, sched.reset)
+
+    def test_a_same_shaped_graph_gets_its_own_layout(self):
+        # ggml reuses its plan for any graph with the same node count and
+        # sizes, even when other tensors are the outputs.
+        with Backend.cpu_init() as backend, GAllocr.from_backend(backend) as allocator:
+            for keep_hidden in (False, True):
+                with Context(1 << 20, no_alloc=True) as ctx:
+                    x = ctx.new_tensor_1d(F32, 4).set_input()
+                    hidden = x.scale(2.0)
+                    if keep_hidden:
+                        hidden.set_output()
+                    out = hidden.scale_bias(1.0, 1.0).set_output()
+                    graph = ctx.new_graph().build_forward_expand(out)
+                    allocator.alloc_graph(graph)
+                    x.write(np.ones(4, np.float32))
+                    backend.compute(graph)
+                    np.testing.assert_allclose(out.to_numpy(), 3.0)
+                    if keep_hidden:
+                        np.testing.assert_allclose(hidden.to_numpy(), 2.0)
+
+
 class UnallocatedGraphTests(unittest.TestCase):
     """Backend.compute on a graph without memory raises; ggml would crash."""
 
