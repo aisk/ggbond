@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-GGBond is an object-oriented Python wrapper over GGML (Georgi Gerganov's Machine Learning library). The OO layer (`ggbond.ggml`) is implemented in **pure Python on top of [`ggml-python`](https://github.com/abetlen/ggml-python)** (a ctypes binding to GGML) — there is no C/C++ source, no compiled extension, and no GGML submodule in this repo. The actual GGML shared library ships inside the `ggml-python` dependency.
+GGBond is an object-oriented Python wrapper over GGML (Georgi Gerganov's Machine Learning library), in two layers: `ggbond.ggml` maps ggml's concepts 1:1, and `ggbond` itself (`ggbond/session.py`) is a small high-level API built on it. The 1:1 layer is implemented in **pure Python on top of [`ggml-python`](https://github.com/abetlen/ggml-python)** (a ctypes binding to GGML) — there is no C/C++ source, no compiled extension, and no GGML submodule in this repo. The actual GGML shared library ships inside the `ggml-python` dependency.
 
 - **Language**: Pure Python 3.10+
 - **Build backend**: `hatchling` (pure-Python wheel, no compilation step)
 - **Dependencies**: `ggml-python>=0.0.45` (provides the `ggml` ctypes module and `ggml.utils`) and `numpy` (the data-transfer API is numpy-based).
 
-All library code lives under **`ggbond/ggml/`**. Every checked-in example uses the current API: `simple.py`, `gpt2.py`, `magika.py`, and `nam.py`. The model-backed examples require external model files.
+The 1:1 layer lives under **`ggbond/ggml/`**; the high-level layer is **`ggbond/session.py`**, re-exported from `ggbond/__init__.py`. Each example exists twice: `examples/simple.py`, `gpt2.py`, `magika.py` and `nam.py` use the high-level API, and `examples/ggml/` holds the same four programs on the 1:1 classes. The model-backed examples require external model files. **`examples/ggml/` must not get an `__init__.py`**: running a script from `examples/` puts that directory first on `sys.path`, and a package named `ggml` there would shadow the real bindings (tests import it as the namespace package `examples.ggml`).
 
 ## Development Commands
 
@@ -20,20 +20,23 @@ uv pip install -e .          # or: pip install -e .
 
 # Tests and smoke test
 .venv/bin/python -m unittest discover -v       # or: uv run python -m unittest discover -v
-.venv/bin/python examples/simple.py            # or: uv run examples/simple.py
+.venv/bin/python examples/simple.py            # high-level API (or: uv run examples/simple.py)
+.venv/bin/python examples/ggml/simple.py       # the same program on the 1:1 layer
 
 # Regenerate the type stub of the generated ops after touching an op table
 .venv/bin/python scripts/gen_stubs.py
 ```
 
-The standard-library `unittest` suite lives under `tests/`. `examples/simple.py` is the numerical smoke test.
+The standard-library `unittest` suite lives under `tests/`. `examples/simple.py` and `examples/ggml/simple.py` are the numerical smoke tests. `tests/test_gpt2_forward.py` checks that the two GPT-2 examples produce bit-identical logits and KV cache on a tiny synthetic model.
 
 ### Backend availability
-Backend factories live in `ggbond/ggml/backend.py`; the GPT-2 and NAM examples provide their own `_init_backend` CLI dispatch. Whether `cuda`/`metal`/`hip` actually work depends on **how the installed `ggml-python` package was built** (this repo does not build GGML). `cpu` is always available. Unavailable optional backends raise `GGMLError`.
+Backend factories live in `ggbond/ggml/backend.py`; the low-level GPT-2 and NAM examples provide their own `_init_backend` CLI dispatch, while the high-level ones pass `-b` straight to `Session(device=…)` (a device name such as `Metal`, or a device type: `cpu`, `gpu`, `accel`). Whether `cuda`/`metal`/`hip` actually work depends on **how the installed `ggml-python` package was built** (this repo does not build GGML). `cpu` is always available. Unavailable optional backends raise `GGMLError`.
 
 ## Architecture
 
-Everything live lives under **`ggbond/ggml/`** — a thin OO wrapper whose classes map to GGML concepts and whose methods map ~1:1 to `ggml_*` / `gguf_*` C functions. Computation is **explicit and two-phase; nothing is lazy**.
+### The 1:1 layer (`ggbond.ggml`)
+
+`ggbond/ggml/` is a thin OO wrapper whose classes map to GGML concepts and whose methods map ~1:1 to `ggml_*` / `gguf_*` C functions. Computation is **explicit and two-phase; nothing is lazy**.
 
 | Module | Class | Wraps / Notes |
 |--------|-------|---------------|
@@ -56,7 +59,7 @@ Every ggml enum is an `IntEnum` whose values come straight from the bindings: `D
 
 Naming rule: methods keep the ggml function name minus its prefix (`Backend.cpu_init`, `Graph.build_forward_expand`). A getter that takes no argument and reads a fixed attribute of the object is a property (`Tensor.ne`, `Backend.buffer_type`, `Scheduler.n_splits`); getters with arguments or that sample changing state stay methods (`GGUF.get_key(i)`, `Device.memory()`).
 
-`ggbond/__init__.py` exports only `__version__`. Import all wrapper classes and constants explicitly from `ggbond.ggml`.
+Import the wrapper classes and constants of this layer explicitly from `ggbond.ggml`. **Keep this layer 1:1**: it gets safety checks (misuse raises instead of aborting) but no convenience that hides a ggml concept; anything that manages several resources for the user belongs in the high-level layer.
 
 ### Canonical computation flow
 
@@ -100,14 +103,49 @@ with Backend.cpu_init() as be, \
 - Every `Handle` (`Context`, `Backend`, `Buffer`, `GAllocr`, `Scheduler`, `GGUF`) raises `GGMLError` from `.ptr` once closed, so no method can pass NULL into ggml. Always go through `self.ptr` when calling ggml; only lifetime guards read `_ptr` directly.
 - Buffers, allocators and schedulers must be freed before their backend. They hold a strong reference to it, and `Backend.close()` closes the ones still open first, so either order works. A `Buffer` nobody references is freed when its context closes.
 - `Tensor.write` / `write_raw` / `read` raise `GGMLError` on a tensor with no backend buffer yet; ggml itself would abort the process.
-- Op preconditions (`_CHECKS`), arena space for tensors and graphs, and GGUF index/type/name lookups are checked in Python so misuse raises (`ValueError`, `GGMLError`, `IndexError`, `KeyError`) instead of hitting a `GGML_ASSERT` abort. Graph node capacity (`new_graph(size=…)`) is not checked: overflowing it in `build_forward_expand` still aborts.
+- Op preconditions (`_CHECKS`), tensor types and dimensions in `new_tensor*` (unknown type, non-integer or negative dimension), arena space for tensors and graphs, and GGUF index/type/name lookups are checked in Python so misuse raises (`ValueError`, `GGMLError`, `IndexError`, `KeyError`) instead of hitting a `GGML_ASSERT` abort. Graph node capacity (`new_graph(size=…)`) is not checked: overflowing it in `build_forward_expand` still aborts.
 - For `GGUF`, remember the split ownership above: closing the `GGUF` does **not** close its data `.context`.
 - A `Scheduler` must be `reset()` whenever the graph context is: after `Context.reset()` the allocated graph is gone, and the wrapper refuses to compute until the scheduler is reset too.
 - A `GAllocr` / `Scheduler` owns the memory of every graph node it allocated. Download results **before** it closes. ggml leaves tensors pointing at freed buffers, so whoever frees a buffer clears the native `buffer` / `data` fields of the tensors it allocated (`buffer.detach`): they become unallocated again, transfers raise `GGMLError`, and ggml would allocate them afresh. This happens when an allocator or scheduler closes, when a larger `reserve()` regrows its buffers (ggml only reallocates when the size grows, which is how the change is detected), and when a `Buffer` closes. A tensor the freer cannot reach, such as a view created in another context after the allocation, is caught by address through `buffer.is_freed` instead, which holds until a new buffer appears at the same address. (In the canonical flow above `tc` is created before `alloc_ctx_tensors`, so it lives in the backend buffer instead and can be read after the allocator closes.)
 - `Backend.compute` / `compute_async` raise `GGMLError` for a graph with an unallocated node (never allocated, or its allocator has since allocated another graph or closed); ggml would dereference the NULL data pointer. The check is `Graph._check_allocated`, one pass over the node pointers.
-- A `GAllocr` / `Scheduler` holds **one graph at a time**, because every graph is laid out over the same buffers. Right before ggml allocates a *different* graph (another graph, or the same one after nodes were added), the tensors the allocator allocated for the previous graph are detached, whichever context they live in and whether or not the `Graph` wrapper still exists: reading an earlier graph's output then raises `GGMLError` instead of returning the new graph's data, so download results before allocating the next graph. A tensor shared by successive graphs (an input in a long-lived context) is allocated afresh for each and must be uploaded again. The detach has to come first: ggml takes a tensor that still has `data` for one allocated elsewhere and would leave it in memory the new graph reuses or frees. Allocating the unchanged current graph again (`GAllocr.alloc_graph` in a loop, `Scheduler.reset()` then `alloc_graph`) detaches nothing and keeps the data, results stay readable after `Scheduler.reset()` until the next graph is allocated, and tensors in any other buffer (weights or a KV cache from `Backend.alloc_ctx_tensors`, also when written by `cpy` nodes) are never touched. Computing a graph that is no longer the allocated one raises `GGMLError` on both paths: `Backend.compute` finds its nodes unallocated, and `Scheduler` refuses a graph other than the current one.
+- A `GAllocr` / `Scheduler` holds **one graph at a time**, because every graph is laid out over the same buffers. Right before ggml allocates a *different* graph (another graph, or the same one after nodes were added), the tensors the allocator allocated for the previous graph are detached, whichever context they live in and whether or not the `Graph` wrapper still exists: reading an earlier graph's output then raises `GGMLError` instead of returning the new graph's data, so download results before allocating the next graph. A tensor shared by successive graphs (an input in a long-lived context) is allocated afresh for each and must be uploaded again. The detach has to come first: ggml takes a tensor that still has `data` for one allocated elsewhere and would leave it in memory the new graph reuses or frees. "Unchanged" means the same graph with the same nodes, leafs **and tensor flags** (`GraphAllocator._key_of`): marking a tensor input or output after it was allocated counts as a different request, since ggml would otherwise keep it in memory that later nodes reuse. Detaching is not enough on its own: ggml only recomputes its layout when the node count or a tensor size differs from the graph it planned last, so another graph of the same shape, or the same graph with other outputs, would be laid out with the old plan and a wanted result computed over. `GAllocr.alloc_graph`, `Scheduler.alloc_graph` and a `Scheduler.compute` that allocates therefore **reserve first unless ggml's current plan was made for exactly this request** (`GraphAllocator._planned`, set by every `reserve`). An explicit `reserve(graph)` followed by `alloc_graph(graph)` plans once; a worst-case `reserve` still sizes the buffers, since ggml only regrows them. Allocating the unchanged current graph again (`GAllocr.alloc_graph` in a loop, `Scheduler.reset()` then `alloc_graph`) detaches nothing and keeps the data, results stay readable after `Scheduler.reset()` until the next graph is allocated, and tensors in any other buffer (weights or a KV cache from `Backend.alloc_ctx_tensors`, also when written by `cpy` nodes) are never touched. Computing a graph that is no longer the allocated one raises `GGMLError` on both paths: `Backend.compute` finds its nodes unallocated, and `Scheduler` refuses a graph other than the current one.
 - A `Tensor` / `Graph` remembers the `_epoch` of its context. `Context.close()` and `Context.reset()` change the epoch, so anything created before raises `GGMLError` when used. Code that wraps a raw tensor pointer must go through `Tensor(ctx, ptr)` on a live context so the epoch is captured.
 - All owning wrappers are context managers with idempotent `close()` + `__del__` (from `Handle`). Prefer `with` blocks.
+
+## The high-level layer (`ggbond`)
+
+`ggbond/session.py` hides the resource plumbing of the scheduler path (`no_alloc=True` contexts + `Scheduler`; nothing else is supported here). `ggbond/__init__.py` re-exports `Session`, `GraphScope`, `Variable`, `default_n_threads`, plus `Tensor`, `GGMLError`, the dtype aliases and the op enums, so a program needs only `from ggbond import …`. Its nouns describe purpose, not ggml objects: a **session** (devices and everything that lives as long as they do), **variables** (tensors that persist: weights, a KV cache) and a **graph** (one computation, rebuilt for each evaluation as in ggml's own C examples). Op names, argument order and ggml shape order are unchanged; there is no numpy-style broadcasting or `@`.
+
+```python
+import numpy as np
+from ggbond import F32, Session
+
+with Session() as sess:                                    # best device, CPU behind it
+    w = sess.load_arrays({"w": np.ones((3, 2), np.float32)})   # persistent variables
+    with sess.graph() as g:                                # one computation
+        x = g.input(np.ones((4, 2), np.float32), name="x")
+        y = w["w"].mul_mat(x)                              # ops are the ggml ops
+        out = g.run(y)                                     # allocate, upload, compute, download
+```
+
+| Class | Notes |
+|-------|-------|
+| `Session(*backends, device=None, n_threads=None, graph_size=None)` | Owns a `Scheduler`, one graph `Context` (`Context.for_tensors(graph_size, graph_size=…)`), every variable context and the backends it opened. With no backends it calls `Backend.load_all()` and opens `init_best()`, or `device` (a registry name, case-insensitive, or a `DeviceType` name: `cpu` / `gpu` / `accel`); a CPU backend is appended when the last one is not CPU. Backends passed in are used in that order and are **not** closed by the session. `n_threads=None` means `default_n_threads()` (physical cores), applied to every CPU backend. `Session.devices()` lists registry names. `sched` and `backends` expose the low-level objects. `close()` ends an open graph, then closes scheduler, contexts, GGUFs and owned backends. |
+| `Variable(Tensor)` | A tensor in a session-owned context whose data lives in a backend buffer for the session's lifetime. `sess.variables({name: (dtype, ne0, …)}, device=None)` creates a group in one exact-size context and zeroes it; `sess.variable(dtype, *ne, name=…)` creates one; `sess.load_arrays({name: array})` creates and uploads; `sess.load_gguf(path)` returns `(variables, gguf)` with the tensor data uploaded via mmap + `write_raw`. Fill or read them any time with `write` / `write_raw` / `to_numpy`. **Its op methods are routed to the open graph's context** (`Session._graph_ctx`), not to the variable's own, so `w.mul_mat(x)` works with the variable as first operand; with no graph open they raise `GGMLError`. |
+| `GraphScope` (`with sess.graph() as g:`) | One computation; a session has one open graph at a time. Entering resets the scheduler and the graph context, leaving resets them again, so every tensor created in the block dies with it. `g.input(array, name=…)` creates an input holding that data (dtype and shape from the array, numpy order); `g.input(dtype, *ne, name=…)` creates a placeholder fed later with `g.run(…, feed={inp: array})`. `g.<op>(a, …)` forwards to the graph context (`g.mul_mat(w, x)`, `g.arange(…)`). `g.update(node)` adds a node computed for its side effect (a `cpy` into a KV-cache variable) **at that point of the program**: ggml has no dependency edge between a write to a variable and a later read, so order is insertion order. `g.run(*fetches, feed=…)` marks the fetches as outputs, allocates if the graph changed, uploads **every** input, computes and returns numpy (one array, a tuple, or `None`). `g.reserve(*fetches)` sizes the scheduler's buffers for a worst-case graph up front. `g.ctx` / `g.cgraph` give the low-level `Context` / `Graph`. |
+
+Rules of this layer, each of which exists because of a ggml behaviour found the hard way:
+
+- `run` uploads every input on every call, including a rerun of the same graph: ggml computes in place and may overwrite an input's memory.
+- `run` allocates a changed graph afresh (`sched.reset(); sched.alloc_graph()`), and the scheduler wrapper reserves for it first: ggml would otherwise lay a graph of the same shape out with the previous graph's plan, which ignores newly fetched intermediates.
+- Fetches are marked `set_output()` so the allocator never reuses their memory, **and so is the `view_src` of a fetched view** (`reshape_*`, `view_*`): ggml only looks at the source's own flag before handing its memory to a later node. Marking an already-allocated tensor later is why the low-level allocator key includes the flags (see Lifecycle rules).
+- A fetch must be contiguous: `run` raises `ValueError` for a permuted view (`x.T`, `permute`) and asks for `.cont()`, because `to_numpy` copies the bytes as stored.
+- `g.input(array)` and `load_arrays` narrow numpy's default types (`_as_array`): float64 becomes F32 and int64 becomes I32 (range-checked), since ggml has next to no F64 / I64 ops and using one aborts. An explicit `dtype=` is taken as given.
+- A `feed=` that fails to upload (wrong shape) leaves the input's previous data in place.
+- Nothing is expanded lazily: `update` and the fetches of `run` / `reserve` go into the graph when called, which is what keeps cache writes and reads in program order.
+- Graph capacity is checked before `build_forward_expand` (which would abort): overflowing `graph_size` raises `GGMLError` naming the `Session(graph_size=…)` fix. The bound is the tensors built in the graph plus every tensor of the contexts its ops read from (`Session._n_read_tensors` walks `Context._deps`, so variable groups the graph does not touch are free, and a low-level `Context` or another session's variables are counted). It is conservative: a group counts in full even if one variable of it is used.
+- A tensor reached through `.src`, `g.cgraph.nodes()` or other low-level accessors is a plain `Tensor`, not a `Variable`; pass it through `g.<op>(t, …)` rather than calling `t.op(…)`, which would target the tensor's own (exact-size) context.
+- Auto-selection (`Session()`) takes `Backend.init_best()` and never picks the BLAS (`accel`) device; ask for it with `device="accel"` or pass backends explicitly.
 
 ## Adding / changing ops
 

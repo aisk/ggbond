@@ -1,14 +1,14 @@
-"""Minimal matrix-multiply demo on the ``ggbond.ggml`` OO wrapper.
+"""Minimal matrix-multiply demo on the high-level ``ggbond`` API.
 
-Mirrors ggml's ``simple-backend`` example: a single ``mul_mat`` computed through
-a multi-backend :class:`Scheduler` built from the best available device plus a
-CPU backend. The scheduler allocates the graph's tensors itself
-(``reset`` -> ``alloc_graph``), so inputs are uploaded *after* ``alloc_graph``.
+Mirrors ggml's ``simple-backend`` example: a single ``mul_mat``. The session
+picks the device (the best one available, with the CPU behind it); the graph
+block holds one computation. ``examples/ggml/simple.py`` is the same program on
+the 1:1 ggml classes.
 """
 
 import numpy as np
 
-from ggbond.ggml import Backend, Context, DeviceType, Scheduler, F32
+from ggbond import Session
 
 
 def main():
@@ -24,37 +24,18 @@ def main():
         [5, 4],
     ], dtype=np.float32)
 
-    # Like ggml's init_model: register all backends, then schedule over the best
-    # device plus an explicit CPU backend.
-    Backend.load_all()
-    cpu = Backend.init_by_type(DeviceType.CPU)
-    cpu.set_n_threads(4)
-    backends = [Backend.init_best(), cpu]
+    # The session lives as long as the devices; the graph is one computation.
+    # A program that computes more than once keeps the session and opens a
+    # graph per evaluation.
+    with Session() as sess, sess.graph() as g:
+        # Inputs take their type and shape from the arrays. ggml's shape is
+        # the reverse of numpy's; a.ne[0] == b.ne[0] (== 2) is the shared
+        # inner dim mul_mat contracts over.
+        ta = g.input(a, name="a")
+        tb = g.input(b, name="b")
+        tc = ta.mul_mat(tb)  # ggml_mul_mat(a, b): ne -> (a.ne1, b.ne1)
 
-    try:
-        with Context(mem_size=1 << 20, no_alloc=True) as ctx, \
-                Scheduler(*backends) as sched:
-            # ggml shape is the reverse of numpy's; a.ne[0] == b.ne[0] (== 2) is
-            # the shared inner dim mul_mat contracts over.
-            ta = ctx.new_tensor_2d(F32, *reversed(a.shape), name="a").set_input()
-            tb = ctx.new_tensor_2d(F32, *reversed(b.shape), name="b").set_input()
-            tc = ta.mul_mat(tb)  # ggml_mul_mat(a, b): ne -> (a.ne1, b.ne1)
-            tc.set_output()
-
-            graph = ctx.new_graph().build_forward_expand(tc)
-
-            # The scheduler allocates the graph's tensors; upload inputs after.
-            sched.reset()
-            sched.alloc_graph(graph)
-            ta.write(a)
-            tb.write(b)
-
-            sched.compute(graph)
-
-            result = tc.to_numpy()
-    finally:
-        for backend in backends:
-            backend.close()
+        result = g.run(tc)  # allocate, upload a and b, compute, download
 
     np.testing.assert_allclose(result, b @ a.T)
 

@@ -1,15 +1,14 @@
-"""Offline NAM A1 WaveNet inference on the ``ggbond.ggml`` OO wrapper.
+"""Offline NAM A1 WaveNet inference on the high-level ``ggbond`` API.
 
-A port of Neural Amp Modeler's "A1" (feed-forward WaveNet) offline renderer to
-the :mod:`ggbond.ggml` API. It reads a ``.nam`` file (JSON: architecture +
-config + a flat ``weights`` array), rebuilds the WaveNet as an explicit ggml
-graph, and renders a WAV through it.
+A port of Neural Amp Modeler's "A1" (feed-forward WaveNet) offline renderer.
+It reads a ``.nam`` file (JSON: architecture + config + a flat ``weights``
+array), rebuilds the WaveNet as a ggml graph, and renders a WAV through it.
 
-The two-phase ggml flow is explicit: weights live in their own ``no_alloc``
-:class:`Context` (allocated once into a backend buffer), then a single forward
-:class:`Graph` is built in a throwaway context, its working memory reserved by a
-:class:`GAllocr`, the padded input uploaded, computed, and the mono result read
-back into numpy.
+The weights are variables of a :class:`Session` (declared together, then filled
+from the flat array). One graph is opened for the render: the padded audio is
+its input, the forward pass is written with ggml's own operations, and
+``g.run`` returns the mono result as a numpy array. ``examples/ggml/nam.py`` is
+the same program on the low-level :mod:`ggbond.ggml` layer.
 
 Convolutions use ``ggml_im2col`` (F32) + ``ggml_mul_mat`` -- the same
 decomposition as ``ggml_conv_1d``, but keeping the kernel in F32 instead of the
@@ -23,7 +22,7 @@ identity and the legacy ``gated`` (primary * sigmoid) pairing are supported.
 Usage::
 
     python examples/nam.py model.nam input.wav output.wav
-    python examples/nam.py model.nam input.wav output.wav -b cuda -t 8
+    python examples/nam.py model.nam input.wav output.wav -b cpu -t 8
 """
 
 from __future__ import annotations
@@ -34,15 +33,9 @@ import wave
 
 import numpy as np
 
-from ggbond.ggml import (
-    Backend,
-    Context,
-    GAllocr,
-    Tensor,
-    F32,
-)
+from ggbond import F32, GraphScope, Session, Tensor, Variable
 
-NAM_MAX_NODES = 8192
+NAM_MAX_NODES = 8192  # graph_size: tensors one render graph may hold
 
 
 class NamError(RuntimeError):
@@ -53,7 +46,7 @@ class NamError(RuntimeError):
 # Graph-side ops
 # ============================================================================
 
-def conv1d(ctx: Context, kernel: Tensor, x: Tensor, dilation: int = 1) -> Tensor:
+def conv1d(kernel: Variable, x: Tensor, dilation: int = 1) -> Tensor:
     """Valid (no-pad, stride-1) 1D convolution, F32 throughout.
 
     ``kernel`` ne = ``(K, IC, OC)`` (reversed torch ``[OC, IC, K]``), ``x`` ne =
@@ -61,17 +54,16 @@ def conv1d(ctx: Context, kernel: Tensor, x: Tensor, dilation: int = 1) -> Tensor
     Mirrors ``ggml_conv_1d`` but with an F32 im2col so F32 kernels are kept.
     """
     # (kernel, data, s0=1, s1, p0, p1, d0=dilation, d1, is_2d, dst_type)
-    # ``kernel`` is a weight living in the model's context, so these ops go
-    # through ``ctx`` to land in the graph context.
-    im = ctx.im2col(kernel, x, 1, 0, 0, 0, dilation, 0, False, F32)  # ne = (IC*K, OL, N)
+    # ``kernel`` is a variable: its ops land in the graph that is open.
+    im = kernel.im2col(x, 1, 0, 0, 0, dilation, 0, False, F32)  # ne = (IC*K, OL, N)
     ick, ol, n = im.ne[0], im.ne[1], im.ne[2]
     k, ic, oc = kernel.ne[0], kernel.ne[1], kernel.ne[2]
     im2 = im.reshape_2d(ick, n * ol)
-    k2 = ctx.reshape_2d(kernel, k * ic, oc)
+    k2 = kernel.reshape_2d(k * ic, oc)
     return im2.mul_mat(k2).reshape_3d(ol, oc, n)  # (OL, OC, N=1)
 
 
-def slice_tail(ctx: Context, t: Tensor, n: int) -> Tensor:
+def slice_tail(t: Tensor, n: int) -> Tensor:
     """Keep the last ``n`` frames along the length axis (ne0), all channels.
 
     Right-aligned trim used everywhere NAM writes ``x[:, :, -n:]``. Returns a
@@ -99,7 +91,7 @@ def _act(t: Tensor, name: str) -> Tensor:
     raise NamError(f"Unsupported activation: {name!r}")
 
 
-def apply_activation(ctx: Context, z: Tensor, spec: dict) -> Tensor:
+def apply_activation(z: Tensor, spec: dict) -> Tensor:
     """Apply a per-layer activation. Plain: one op. Gated: split the channel
     axis in half and return ``primary(first) * secondary(second)``."""
     if spec["kind"] == "plain":
@@ -194,30 +186,25 @@ def _normalize_array(cfg: dict) -> dict:
 # ============================================================================
 
 class NamModel:
-    """Owns the weight context (must outlive every graph built from its tensors)."""
+    """The weights (session variables) and what the forward pass needs to know."""
 
     def __init__(self):
         self.arrays: list[dict] = []
         self.head_scale = 1.0
         self.receptive_field = 1
         self.sample_rate = 48000
-        self.ctx_w: Context | None = None
-
-    def close(self):
-        if self.ctx_w is not None:
-            self.ctx_w.close()
 
 
-def _new_kernel(ctx: Context, k: int, ic: int, oc: int, name: str) -> Tensor:
-    return ctx.new_tensor_3d(F32, k, ic, oc, name=name)
+def _kernel(k: int, ic: int, oc: int) -> tuple:
+    return (F32, k, ic, oc)
 
 
-def _new_bias(ctx: Context, oc: int, name: str) -> Tensor:
+def _bias(oc: int) -> tuple:
     # ne = (1, OC) so it broadcasts across the length axis in ggml_add.
-    return ctx.new_tensor_2d(F32, 1, oc, name=name)
+    return (F32, 1, oc)
 
 
-def load_model(path: str, backend: Backend) -> NamModel:
+def load_model(path: str, sess: Session) -> NamModel:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if data.get("architecture") != "WaveNet":
@@ -240,60 +227,56 @@ def load_model(path: str, backend: Backend) -> NamModel:
         (k - 1) * d for m in metas for k, d in zip(m["kernel_sizes"], m["dilations"])
     )
 
-    # -- create weight tensors (metadata only) --
+    # -- declare the weights, in NAM's export order --
     #   per array: rechannel + 5 per layer (conv_w/b, mix_w, l1x1_w/b) + head_w (+ head_b)
-    n_tensors = 0
-    for m in metas:
-        n_tensors += 1 + 5 * len(m["dilations"]) + 1 + (1 if m["head_bias"] else 0)
-    ctx_w = Context.for_tensors(n_tensors + 16)
-    model.ctx_w = ctx_w
-
+    spec: dict[str, tuple] = {}
     for ai, m in enumerate(metas):
         cond, chan, bott = m["condition_size"], m["channels"], m["bottleneck"]
-        arr = {"meta": m, "layers": []}
-        arr["rechannel"] = _new_kernel(ctx_w, 1, m["input_size"], chan, f"a{ai}.rechannel")
-        for li, (ks, dil, spec) in enumerate(zip(m["kernel_sizes"], m["dilations"], m["acts"])):
-            mid = 2 * bott if spec["kind"] == "gated" else bott
-            arr["layers"].append({
-                "conv_w": _new_kernel(ctx_w, ks, chan, mid, f"a{ai}.l{li}.conv"),
-                "conv_b": _new_bias(ctx_w, mid, f"a{ai}.l{li}.conv_b"),
-                "mix_w": _new_kernel(ctx_w, 1, cond, mid, f"a{ai}.l{li}.mix"),
-                "l1x1_w": _new_kernel(ctx_w, 1, bott, chan, f"a{ai}.l{li}.l1x1"),
-                "l1x1_b": _new_bias(ctx_w, chan, f"a{ai}.l{li}.l1x1_b"),
-                "dilation": dil,
-                "act": spec,
-            })
-        arr["head_w"] = _new_kernel(ctx_w, 1, bott, m["head_size"], f"a{ai}.head")
-        arr["head_b"] = _new_bias(ctx_w, m["head_size"], f"a{ai}.head_b") if m["head_bias"] else None
-        model.arrays.append(arr)
+        spec[f"a{ai}.rechannel"] = _kernel(1, m["input_size"], chan)
+        for li, (ks, act) in enumerate(zip(m["kernel_sizes"], m["acts"])):
+            mid = 2 * bott if act["kind"] == "gated" else bott
+            spec[f"a{ai}.l{li}.conv"] = _kernel(ks, chan, mid)
+            spec[f"a{ai}.l{li}.conv_b"] = _bias(mid)
+            spec[f"a{ai}.l{li}.mix"] = _kernel(1, cond, mid)
+            spec[f"a{ai}.l{li}.l1x1"] = _kernel(1, bott, chan)
+            spec[f"a{ai}.l{li}.l1x1_b"] = _bias(chan)
+        spec[f"a{ai}.head"] = _kernel(1, bott, m["head_size"])
+        if m["head_bias"]:
+            spec[f"a{ai}.head_b"] = _bias(m["head_size"])
+    w = sess.variables(spec)
 
-    backend.alloc_ctx_tensors(ctx_w)
-
-    # -- upload weights, walking the flat array in NAM's export order --
+    # -- fill them, walking the flat array in that same order --
+    # A flat slice is written as is: ggml's (K, IC, OC) memory layout is torch's
+    # [OC, IC, K] flattened.
     weights = np.asarray(data["weights"], dtype=np.float32)
     off = 0
-
-    def take(t: Tensor) -> None:
-        nonlocal off
-        n = t.nelements
-        t.write(weights[off:off + n])
+    for var in w.values():
+        n = var.nelements
+        var.write(weights[off:off + n])
         off += n
-
-    for arr in model.arrays:
-        take(arr["rechannel"])
-        for layer in arr["layers"]:
-            take(layer["conv_w"]); take(layer["conv_b"])
-            take(layer["mix_w"])
-            take(layer["l1x1_w"]); take(layer["l1x1_b"])
-        take(arr["head_w"])
-        if arr["head_b"] is not None:
-            take(arr["head_b"])
 
     # The exported weight blob stores head_scale as its final element (authoritative;
     # the config value can be stale), matching NAM's own import.
     if off != weights.size - 1:
         raise NamError(f"weight import consumed {off}, file has {weights.size} (+head_scale)")
     model.head_scale = float(weights[off])
+
+    for ai, m in enumerate(metas):
+        model.arrays.append({
+            "meta": m,
+            "rechannel": w[f"a{ai}.rechannel"],
+            "layers": [{
+                "conv_w": w[f"a{ai}.l{li}.conv"],
+                "conv_b": w[f"a{ai}.l{li}.conv_b"],
+                "mix_w": w[f"a{ai}.l{li}.mix"],
+                "l1x1_w": w[f"a{ai}.l{li}.l1x1"],
+                "l1x1_b": w[f"a{ai}.l{li}.l1x1_b"],
+                "dilation": dil,
+                "act": act,
+            } for li, (dil, act) in enumerate(zip(m["dilations"], m["acts"]))],
+            "head_w": w[f"a{ai}.head"],
+            "head_b": w.get(f"a{ai}.head_b"),
+        })
     return model
 
 
@@ -301,22 +284,22 @@ def load_model(path: str, backend: Backend) -> NamModel:
 # Forward graph
 # ============================================================================
 
-def _layer_forward(ctx, layer, x, cond, out_length):
+def _layer_forward(layer, x, cond, out_length):
     """One WaveNet layer. Returns (residual, head_term)."""
     dil = layer["dilation"]
-    zconv = conv1d(ctx, layer["conv_w"], x, dil).add(layer["conv_b"])
-    mix = conv1d(ctx, layer["mix_w"], cond, 1)
-    mix = slice_tail(ctx, mix, zconv.ne[0])
+    zconv = conv1d(layer["conv_w"], x, dil).add(layer["conv_b"])
+    mix = conv1d(layer["mix_w"], cond, 1)
+    mix = slice_tail(mix, zconv.ne[0])
     z = zconv.add(mix)
-    post = apply_activation(ctx, z, layer["act"])
+    post = apply_activation(z, layer["act"])
 
-    layer_out = conv1d(ctx, layer["l1x1_w"], post, 1).add(layer["l1x1_b"])
-    head_term = slice_tail(ctx, post, out_length)
-    residual = slice_tail(ctx, x, layer_out.ne[0]).add(layer_out)
+    layer_out = conv1d(layer["l1x1_w"], post, 1).add(layer["l1x1_b"])
+    head_term = slice_tail(post, out_length)
+    residual = slice_tail(x, layer_out.ne[0]).add(layer_out)
     return residual, head_term
 
 
-def _array_forward(ctx, arr, y, cond, head_input):
+def _array_forward(arr, y, cond, head_input):
     """One layer array. Returns (head_output, layer_output)."""
     m = arr["meta"]
     rf = 1 + sum((k - 1) * d for k, d in zip(m["kernel_sizes"], m["dilations"]))
@@ -324,48 +307,37 @@ def _array_forward(ctx, arr, y, cond, head_input):
     if out_length <= 0:
         raise NamError("input is shorter than the model receptive field")
 
-    x = conv1d(ctx, arr["rechannel"], y, 1)
+    x = conv1d(arr["rechannel"], y, 1)
     for layer in arr["layers"]:
-        x, head_term = _layer_forward(ctx, layer, x, cond, out_length)
+        x, head_term = _layer_forward(layer, x, cond, out_length)
         if head_input is None:
             head_input = head_term
         else:
-            head_input = slice_tail(ctx, head_input, out_length).add(head_term)
+            head_input = slice_tail(head_input, out_length).add(head_term)
 
-    head_out = conv1d(ctx, arr["head_w"], head_input, 1)
+    head_out = conv1d(arr["head_w"], head_input, 1)
     if arr["head_b"] is not None:
         head_out = head_out.add(arr["head_b"])
-    return head_out, slice_tail(ctx, x, out_length)
+    return head_out, slice_tail(x, out_length)
 
 
-def build_graph(model: NamModel, ctx: Context, n_samples: int):
-    """Build the full forward graph in ``ctx``. Returns (graph, inp, out)."""
-    inp = ctx.new_tensor_2d(F32, n_samples, 1, name="input").set_input()
+def forward(model: NamModel, g: GraphScope, x: np.ndarray) -> Tensor:
+    """Write the full forward pass for the samples ``x`` into the open graph."""
+    inp = g.input(x.reshape(1, -1), name="input")  # ne = (n_samples, 1)
     cond = inp
     y = inp
     head_input = None
     for arr in model.arrays:
-        head_input, y = _array_forward(ctx, arr, y, cond, head_input)
-
-    out = head_input.scale(model.head_scale)
-    out.name = "output"
-    out.set_output()
-    graph = ctx.new_graph(size=NAM_MAX_NODES).build_forward_expand(out)
-    return graph, inp, out
+        head_input, y = _array_forward(arr, y, cond, head_input)
+    return head_input.scale(model.head_scale)
 
 
-def run_offline(model: NamModel, backend: Backend, audio: np.ndarray) -> np.ndarray:
+def run_offline(model: NamModel, sess: Session, audio: np.ndarray) -> np.ndarray:
     pad = model.receptive_field - 1
     x = np.concatenate([np.zeros(pad, np.float32), audio.astype(np.float32)]) if pad > 0 else audio
-    n = x.size
 
-    with Context.for_tensors(0, graph_size=NAM_MAX_NODES) as ctx:
-        graph, inp, out = build_graph(model, ctx, n)
-        with GAllocr.from_backend(backend) as alloc:
-            alloc.alloc_graph(graph)
-            inp.write(x.reshape(n, 1))
-            backend.compute(graph)
-            y = out.to_numpy().reshape(-1)
+    with sess.graph() as g:
+        y = g.run(forward(model, g, x)).reshape(-1)
 
     if y.size != audio.size:  # guard against off-by-one padding
         y = y[-audio.size:]
@@ -413,52 +385,38 @@ def write_wav_mono(path: str, audio: np.ndarray, rate: int) -> None:
 # Main
 # ============================================================================
 
-def _init_backend(kind: str, device: int) -> Backend:
-    kind = kind.lower()
-    if kind == "cpu":
-        return Backend.cpu_init()
-    if kind == "cuda":
-        return Backend.cuda_init(device)
-    if kind == "metal":
-        return Backend.metal_init()
-    if kind == "hip":
-        return Backend.hip_init(device)
-    raise ValueError(f"unknown backend '{kind}' (cpu|cuda|metal|hip)")
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Offline NAM A1 WaveNet inference on ggbond.ggml")
+    devices = ", ".join(Session.devices())
+    parser = argparse.ArgumentParser(description="Offline NAM A1 WaveNet inference on ggbond")
     parser.add_argument("model", help="Path to a .nam model file")
     parser.add_argument("input", help="Path to an input WAV file")
     parser.add_argument("output", help="Path to write the processed WAV")
-    parser.add_argument("-b", "--backend", default="cpu", help="Backend (cpu|cuda|metal|hip)")
-    parser.add_argument("-t", "--threads", type=int, default=4, help="CPU threads")
-    parser.add_argument("--device", type=int, default=0, help="GPU device index")
+    parser.add_argument("-b", "--backend", default=None, metavar="DEVICE",
+                        help=f"Device name ({devices}) or type (cpu, gpu, ...); "
+                             "default: the best available device")
+    parser.add_argument("-t", "--threads", type=int, default=None,
+                        help="CPU threads (default: the physical cores)")
     parser.add_argument("--allow-sample-rate-mismatch", action="store_true",
                         help="Run even when the input rate differs from the model rate")
     args = parser.parse_args()
 
-    backend = _init_backend(args.backend, args.device)
-    if backend.is_cpu:
-        backend.set_n_threads(args.threads)
-
-    model = None
     try:
-        model = load_model(args.model, backend)
+        sess = Session(device=args.backend, n_threads=args.threads, graph_size=NAM_MAX_NODES)
+    except ValueError as e:  # unknown device: the message lists the available ones
+        parser.error(str(e))
+
+    with sess:
+        model = load_model(args.model, sess)
         audio, in_rate = read_wav_mono(args.input)
         if in_rate != model.sample_rate and not args.allow_sample_rate_mismatch:
             raise NamError(
                 f"input WAV is {in_rate} Hz, model expects {model.sample_rate} Hz. "
                 "Resample first or pass --allow-sample-rate-mismatch."
             )
-        out = run_offline(model, backend, audio)
+        out = run_offline(model, sess, audio)
         write_wav_mono(args.output, out, in_rate)
         print(f"Wrote {args.output} ({out.size} samples, rf={model.receptive_field}, "
-              f"backend={args.backend})")
-    finally:
-        if model is not None:
-            model.close()
-        backend.close()
+              f"devices={', '.join(b.name for b in sess.backends)})")
     return 0
 
 

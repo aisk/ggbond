@@ -1,20 +1,21 @@
-"""GPT-2 inference on the ``ggbond.ggml`` OO wrapper.
+"""GPT-2 inference on the high-level ``ggbond`` API.
 
-A faithful port of ggml's ``gpt-2`` ``main-backend`` example to the
-``ggbond.ggml`` API. It reads the *legacy* ggml model format (``ggml-model.bin``
-produced by ggml's convert script -- magic ``ggml``), not GGUF: hparams, the
-inline vocab, and the named weights are parsed straight from the file with plain
-Python I/O, then uploaded into backend-resident tensors.
+A port of ggml's ``gpt-2`` ``main-backend`` example. It reads the *legacy* ggml
+model format (``ggml-model.bin`` produced by ggml's convert script -- magic
+``ggml``), not GGUF: hparams, the inline vocab, and the named weights are parsed
+straight from the file with plain Python I/O.
 
-The two-phase ggml flow is explicit throughout: per token we reset one
-metadata :class:`Context`, build a fresh graph in it, let a reused
-:class:`GAllocr` allocate its working memory, upload the input ids, compute, and
-read the last token's logits back into numpy.
+A :class:`Session` picks the device. The weights and the key/value cache are
+*variables*: declared once, filled from the file, kept for the whole run. Each
+evaluation opens a graph (``with sess.graph() as g:``), because its shapes
+depend on how many tokens are fed and how many are already cached, builds the
+transformer in it, and runs it for the logits. The same program on the 1:1 ggml
+classes is ``examples/ggml/gpt2.py``.
 
 Usage::
 
     python examples/gpt2.py -m models/gpt-2-117M/ggml-model.bin -p "Hello"
-    python examples/gpt2.py -m models/gpt-2-117M/ggml-model.bin -b cuda
+    python examples/gpt2.py -m models/gpt-2-117M/ggml-model.bin -b gpu
 
 Get a model with ggml's gpt-2 ``convert-ckpt-to-ggml.py`` / ``download-model.sh``
 (the legacy ``.bin`` format this example reads).
@@ -31,7 +32,7 @@ import time
 import numpy as np
 
 import ggml as _ggml  # legacy-format constants + ftype->type conversion only
-from ggbond.ggml import Backend, Context, GAllocr, Tensor, DType, F32, I32
+from ggbond import DType, F32, I32, GraphScope, Session
 
 GPT2_MAX_NODES = 4096
 
@@ -137,8 +138,7 @@ class GPT2Layer:
 
 
 class GPT2Model:
-    """Owns the weight + KV contexts so they outlive every graph built from them,
-    and the context each evaluation builds its graph in."""
+    """The model's variables: weights, and the key/value cache."""
 
     def __init__(self):
         self.hparams = None
@@ -146,22 +146,19 @@ class GPT2Model:
         self.wte = self.wpe = self.lm_head = None
         self.layers: list[GPT2Layer] = []
         self.memory_k = self.memory_v = None
-        self.ctx_w: Context | None = None
-        self.ctx_kv: Context | None = None
-        # Holds one evaluation's graph at a time; reset before each one.
-        self.ctx_graph = Context.for_tensors(0, graph_size=GPT2_MAX_NODES)
-
-    def close(self):
-        # Both contexts must outlive any graph referencing their tensors; they
-        # are freed independently of the backend buffers that hold the data.
-        self.ctx_graph.close()
-        if self.ctx_kv is not None:
-            self.ctx_kv.close()
-        if self.ctx_w is not None:
-            self.ctx_w.close()
 
 
-def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
+_LAYER_TENSORS = {
+    "ln_1_g": "ln_1/g", "ln_1_b": "ln_1/b",
+    "ln_2_g": "ln_2/g", "ln_2_b": "ln_2/b",
+    "c_attn_attn_w": "attn/c_attn/w", "c_attn_attn_b": "attn/c_attn/b",
+    "c_attn_proj_w": "attn/c_proj/w", "c_attn_proj_b": "attn/c_proj/b",
+    "c_mlp_fc_w": "mlp/c_fc/w", "c_mlp_fc_b": "mlp/c_fc/b",
+    "c_mlp_proj_w": "mlp/c_proj/w", "c_mlp_proj_b": "mlp/c_proj/b",
+}
+
+
+def gpt2_model_load(fname: str, sess: Session, n_ctx: int):
     """Load a legacy ggml GPT-2 model. Returns (model, token_to_id, id_to_token)."""
     print(f"gpt2_model_load: loading model from '{fname}'")
 
@@ -214,69 +211,52 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
         model = GPT2Model()
         model.hparams = GPT2HParams(n_vocab, n_ctx, n_embd, n_head, n_layer)
 
-        # -- create the weight tensors (metadata only; no_alloc context) --
-        n_tensors = 2 + 6 + 12 * n_layer
-        ctx_w = Context.for_tensors(n_tensors)
-        model.ctx_w = ctx_w
+        # -- declare the weights: name -> (type, dimensions in ggml order) --
+        spec = {
+            "model/ln_f/g": (F32, n_embd),
+            "model/ln_f/b": (F32, n_embd),
+            "model/wte": (wtype, n_embd, n_vocab),
+            "model/wpe": (F32, n_embd, n_ctx_train),
+            "model/lm_head": (wtype, n_embd, n_vocab),
+        }
+        for i in range(n_layer):
+            p = f"model/h{i}"
+            spec[f"{p}/ln_1/g"] = (F32, n_embd)
+            spec[f"{p}/ln_1/b"] = (F32, n_embd)
+            spec[f"{p}/ln_2/g"] = (F32, n_embd)
+            spec[f"{p}/ln_2/b"] = (F32, n_embd)
+            spec[f"{p}/attn/c_attn/w"] = (wtype, n_embd, 3 * n_embd)
+            spec[f"{p}/attn/c_attn/b"] = (F32, 3 * n_embd)
+            spec[f"{p}/attn/c_proj/w"] = (wtype, n_embd, n_embd)
+            spec[f"{p}/attn/c_proj/b"] = (F32, n_embd)
+            spec[f"{p}/mlp/c_fc/w"] = (wtype, n_embd, 4 * n_embd)
+            spec[f"{p}/mlp/c_fc/b"] = (F32, 4 * n_embd)
+            spec[f"{p}/mlp/c_proj/w"] = (wtype, 4 * n_embd, n_embd)
+            spec[f"{p}/mlp/c_proj/b"] = (F32, n_embd)
 
-        tensors: dict[str, Tensor] = {}
+        # one group of variables, allocated together on the session's device
+        tensors = sess.variables(spec)
+        size_mb = sum(t.nbytes for t in tensors.values()) / (1024.0 * 1024.0)
+        print(f"gpt2_model_load: weights size = {size_mb:6.2f} MB")
 
-        model.ln_f_g = ctx_w.new_tensor_1d(F32, n_embd)
-        model.ln_f_b = ctx_w.new_tensor_1d(F32, n_embd)
-        model.wte = ctx_w.new_tensor_2d(wtype, n_embd, n_vocab)
-        model.wpe = ctx_w.new_tensor_2d(F32, n_embd, n_ctx_train)
-        model.lm_head = ctx_w.new_tensor_2d(wtype, n_embd, n_vocab)
-
-        tensors["model/ln_f/g"] = model.ln_f_g
-        tensors["model/ln_f/b"] = model.ln_f_b
-        tensors["model/wte"] = model.wte
-        tensors["model/wpe"] = model.wpe
-        tensors["model/lm_head"] = model.lm_head
-
+        model.ln_f_g = tensors["model/ln_f/g"]
+        model.ln_f_b = tensors["model/ln_f/b"]
+        model.wte = tensors["model/wte"]
+        model.wpe = tensors["model/wpe"]
+        model.lm_head = tensors["model/lm_head"]
         for i in range(n_layer):
             layer = GPT2Layer()
-            layer.ln_1_g = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.ln_1_b = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.ln_2_g = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.ln_2_b = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.c_attn_attn_w = ctx_w.new_tensor_2d(wtype, n_embd, 3 * n_embd)
-            layer.c_attn_attn_b = ctx_w.new_tensor_1d(F32, 3 * n_embd)
-            layer.c_attn_proj_w = ctx_w.new_tensor_2d(wtype, n_embd, n_embd)
-            layer.c_attn_proj_b = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.c_mlp_fc_w = ctx_w.new_tensor_2d(wtype, n_embd, 4 * n_embd)
-            layer.c_mlp_fc_b = ctx_w.new_tensor_1d(F32, 4 * n_embd)
-            layer.c_mlp_proj_w = ctx_w.new_tensor_2d(wtype, 4 * n_embd, n_embd)
-            layer.c_mlp_proj_b = ctx_w.new_tensor_1d(F32, n_embd)
+            for attr, suffix in _LAYER_TENSORS.items():
+                setattr(layer, attr, tensors[f"model/h{i}/{suffix}"])
             model.layers.append(layer)
 
-            p = f"model/h{i}"
-            tensors[f"{p}/ln_1/g"] = layer.ln_1_g
-            tensors[f"{p}/ln_1/b"] = layer.ln_1_b
-            tensors[f"{p}/ln_2/g"] = layer.ln_2_g
-            tensors[f"{p}/ln_2/b"] = layer.ln_2_b
-            tensors[f"{p}/attn/c_attn/w"] = layer.c_attn_attn_w
-            tensors[f"{p}/attn/c_attn/b"] = layer.c_attn_attn_b
-            tensors[f"{p}/attn/c_proj/w"] = layer.c_attn_proj_w
-            tensors[f"{p}/attn/c_proj/b"] = layer.c_attn_proj_b
-            tensors[f"{p}/mlp/c_fc/w"] = layer.c_mlp_fc_w
-            tensors[f"{p}/mlp/c_fc/b"] = layer.c_mlp_fc_b
-            tensors[f"{p}/mlp/c_proj/w"] = layer.c_mlp_proj_w
-            tensors[f"{p}/mlp/c_proj/b"] = layer.c_mlp_proj_b
-
-        # allocate a backend buffer for all weight tensors
-        buf_w = backend.alloc_ctx_tensors(ctx_w)
-        size_mb = buf_w.size / (1024.0 * 1024.0)
-        print(f"gpt2_model_load: backend buffer size = {size_mb:6.2f} MB")
-
-        # -- key + value memory (uses the *user* n_ctx) --
+        # -- key + value memory (uses the *user* n_ctx): variables the graphs write --
         n_mem = n_layer * n_ctx
         n_elements = n_embd * n_mem
-        ctx_kv = Context.for_tensors(2)
-        model.ctx_kv = ctx_kv
-        model.memory_k = ctx_kv.new_tensor_1d(F32, n_elements, name="memory_k")
-        model.memory_v = ctx_kv.new_tensor_1d(F32, n_elements, name="memory_v")
-        buf_kv = backend.alloc_ctx_tensors(ctx_kv)
-        kv_mb = buf_kv.size / (1024.0 * 1024.0)
+        memory = sess.variables({"memory_k": (F32, n_elements), "memory_v": (F32, n_elements)})
+        model.memory_k = memory["memory_k"]
+        model.memory_v = memory["memory_v"]
+        kv_mb = (model.memory_k.nbytes + model.memory_v.nbytes) / (1024.0 * 1024.0)
         print(f"gpt2_model_load: memory size = {kv_mb:8.2f} MB, n_mem = {n_mem}")
 
         # -- load weights --
@@ -312,7 +292,6 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
             if name in loaded_names:
                 raise ValueError(f"duplicate tensor '{name}' in model file")
             tensor = tensors[name]
-            tensor.name = name
 
             if ttype != int(tensor.dtype):
                 raise ValueError(
@@ -357,27 +336,23 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
 # Graph
 # ============================================================================
 
-def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
-    """Build the forward graph in ``ctx``. Returns (graph, embd, position, logits)."""
+def gpt2_graph(model: GPT2Model, g: GraphScope, n_past: int, n_tokens: int):
+    """Build the forward pass in the graph ``g``. Returns (embd, position, logits)."""
     N = n_tokens
     hp = model.hparams
     n_embd, n_layer, n_ctx, n_head = hp.n_embd, hp.n_layer, hp.n_ctx, hp.n_head
 
-    # Weights and the KV cache live in the model's own contexts, which are
-    # sized only for their metadata. Ops whose first operand is one of them go
-    # through ``ctx`` (``ctx.mul_mat(w, x)`` is ``ggml_mul_mat(ctx, w, x)``) so
-    # the result nodes land in this graph's context.
+    # Weights and the KV cache are variables; an expression on one
+    # (``w.mul_mat(x)``, ``memory_k.view_1d(...)``) becomes part of this graph.
     memory_k = model.memory_k
     memory_v = model.memory_v
     k_esz = memory_k.element_size  # bytes per element (F32 -> 4)
 
-    graph = ctx.new_graph(size=GPT2_MAX_NODES)
-
-    embd = ctx.new_tensor_1d(I32, N, name="embd").set_input()
-    position = ctx.new_tensor_1d(I32, N, name="position").set_input()
+    embd = g.input(I32, N, name="embd")
+    position = g.input(I32, N, name="position")
 
     # wte + wpe
-    inpL = ctx.get_rows(model.wte, embd).add(ctx.get_rows(model.wpe, position))
+    inpL = model.wte.get_rows(embd) + model.wpe.get_rows(position)
 
     for il in range(n_layer):
         layer = model.layers[il]
@@ -386,7 +361,7 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
         cur = inpL.norm(hp.eps).mul(layer.ln_1_g).add(layer.ln_1_b)
 
         # attention: fused QKV projection -> [3*n_embd, N]
-        cur = ctx.mul_mat(layer.c_attn_attn_w, cur).add(layer.c_attn_attn_b)
+        cur = layer.c_attn_attn_w.mul_mat(cur).add(layer.c_attn_attn_b)
 
         # row stride of the contiguous [3*n_embd, N] QKV tensor
         nb1 = cur.nb[1]
@@ -396,17 +371,18 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
 
         # store the new keys/values into the KV cache
         if N >= 1:
-            k = ctx.view_1d(memory_k, N * n_embd, k_esz * n_embd * (il * n_ctx + n_past))
-            v = ctx.view_1d(memory_v, N * n_embd, k_esz * n_embd * (il * n_ctx + n_past))
-            graph.build_forward_expand(Kcur.cpy(k))
-            graph.build_forward_expand(Vcur.cpy(v))
+            # g.update registers the copies now, so they run before the reads below
+            k = memory_k.view_1d(N * n_embd, k_esz * n_embd * (il * n_ctx + n_past))
+            v = memory_v.view_1d(N * n_embd, k_esz * n_embd * (il * n_ctx + n_past))
+            g.update(Kcur.cpy(k))
+            g.update(Vcur.cpy(v))
 
         # Q = [64, N, 12]
         Q = Qcur.cont_3d(n_embd // n_head, n_head, N).permute(0, 2, 1, 3)
 
         # K = [64, n_past + N, 12]
         K = (
-            ctx.view_1d(memory_k, (n_past + N) * n_embd, il * n_ctx * k_esz * n_embd)
+            memory_k.view_1d((n_past + N) * n_embd, il * n_ctx * k_esz * n_embd)
             .reshape_3d(n_embd // n_head, n_head, n_past + N)
             .permute(0, 2, 1, 3)
         )
@@ -419,7 +395,7 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
 
         # V^T = [n_past + N, 64, 12]
         V_trans = (
-            ctx.view_1d(memory_v, (n_past + N) * n_embd, il * n_ctx * k_esz * n_embd)
+            memory_v.view_1d((n_past + N) * n_embd, il * n_ctx * k_esz * n_embd)
             .reshape_3d(n_embd // n_head, n_head, n_past + N)
             .permute(1, 2, 0, 3)
             .cont_3d(n_past + N, n_embd // n_head, n_head)
@@ -429,7 +405,7 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
         cur = KQV.permute(0, 2, 1, 3).cont_2d(n_embd, N)
 
         # attention output projection
-        cur = ctx.mul_mat(layer.c_attn_proj_w, cur).add(layer.c_attn_proj_b)
+        cur = layer.c_attn_proj_w.mul_mat(cur).add(layer.c_attn_proj_b)
 
         # residual
         cur = cur.add(inpL)
@@ -437,8 +413,8 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
 
         # ln_2 + MLP
         cur = inpFF.norm(hp.eps).mul(layer.ln_2_g).add(layer.ln_2_b)
-        cur = ctx.mul_mat(layer.c_mlp_fc_w, cur).add(layer.c_mlp_fc_b).gelu()
-        cur = ctx.mul_mat(layer.c_mlp_proj_w, cur).add(layer.c_mlp_proj_b)
+        cur = layer.c_mlp_fc_w.mul_mat(cur).add(layer.c_mlp_fc_b).gelu()
+        cur = layer.c_mlp_proj_w.mul_mat(cur).add(layer.c_mlp_proj_b)
 
         # residual
         inpL = cur.add(inpFF)
@@ -447,56 +423,36 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
     inpL = inpL.norm(hp.eps).mul(model.ln_f_g).add(model.ln_f_b)
 
     # logits = lm_head * inpL
-    logits = ctx.mul_mat(model.lm_head, inpL)
+    logits = model.lm_head.mul_mat(inpL)
     logits.name = "logits"
-    logits.set_output()
-
-    graph.build_forward_expand(logits)
-    return graph, embd, position, logits
+    return embd, position, logits
 
 
 # ============================================================================
 # Evaluation
 # ============================================================================
 
-def gpt2_eval(model, backend, allocr, n_past, embd_inp) -> np.ndarray:
+def gpt2_eval(model: GPT2Model, sess: Session, n_past: int, embd_inp) -> np.ndarray:
     """Run the transformer and return logits for the last token."""
     N = len(embd_inp)
     n_vocab = model.hparams.n_vocab
-    # Reuse one metadata context for every evaluation: ggml_reset empties it,
-    # which also retires the previous evaluation's tensors and graph.
-    ctx = model.ctx_graph
-    ctx.reset()
-    graph, embd, position, logits = gpt2_graph(model, ctx, n_past, N)
-
-    allocr.alloc_graph(graph)
-
-    embd.write(np.asarray(embd_inp, dtype=np.int32))
-    position.write(np.arange(n_past, n_past + N, dtype=np.int32))
-
-    backend.compute(graph)
+    # A graph per evaluation: its shapes depend on N and n_past. Everything
+    # built in the block ends with it; the weights and the KV cache stay.
+    with sess.graph() as g:
+        embd, position, logits = gpt2_graph(model, g, n_past, N)
+        out = g.run(logits, feed={
+            embd: np.asarray(embd_inp, dtype=np.int32),
+            position: np.arange(n_past, n_past + N, dtype=np.int32),
+        })
 
     # logits hold [n_vocab, N] row-major (n_vocab fastest); return just the
     # last token's row, mirroring the C++ which reads that slice directly.
-    return logits.to_numpy().reshape(N, n_vocab)[N - 1].copy()
+    return out.reshape(N, n_vocab)[N - 1].copy()
 
 
 # ============================================================================
 # Main
 # ============================================================================
-
-def _init_backend(kind: str, device: int) -> Backend:
-    kind = kind.lower()
-    if kind == "cpu":
-        return Backend.cpu_init()
-    if kind == "cuda":
-        return Backend.cuda_init(device)
-    if kind == "metal":
-        return Backend.metal_init()
-    if kind == "hip":
-        return Backend.hip_init(device)
-    raise ValueError(f"unknown backend '{kind}' (cpu|cuda|metal|hip)")
-
 
 def main():
     parser = argparse.ArgumentParser(description="GPT-2 inference on the ggbond.ggml API")
@@ -506,9 +462,11 @@ def main():
     parser.add_argument("-n", "--n-predict", type=int, default=200, help="Tokens to predict")
     parser.add_argument("--n-ctx", type=int, default=1024, help="Context size")
     parser.add_argument("--n-batch", type=int, default=32, help="Prompt batch size")
-    parser.add_argument("-t", "--threads", type=int, default=4, help="CPU threads")
-    parser.add_argument("-b", "--backend", default="cpu", help="Backend (cpu|cuda|metal|hip)")
-    parser.add_argument("--device", type=int, default=0, help="GPU device index")
+    parser.add_argument("-t", "--threads", type=int, default=None,
+                        help="CPU threads (default: physical cores)")
+    parser.add_argument("-b", "--backend", default=None,
+                        help="Device name or type, e.g. cpu, gpu or one of: "
+                             + ", ".join(Session.devices()) + " (default: best available)")
     parser.add_argument("--top-k", type=int, default=40, help="Top-k sampling")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p sampling")
     parser.add_argument("--temp", type=float, default=1.0, help="Temperature")
@@ -521,25 +479,19 @@ def main():
     print(f"main: seed = {seed}")
     rng = random.Random(seed)
 
-    backend = _init_backend(args.backend, args.device)
-    if backend.is_cpu:
-        backend.set_n_threads(args.threads)
-
-    allocr = None
-    model = None
-    try:
+    with Session(device=args.backend, n_threads=args.threads, graph_size=GPT2_MAX_NODES) as sess:
         t_start = time.perf_counter()
-        model, token_to_id, id_to_token = gpt2_model_load(args.model, backend, args.n_ctx)
+        model, token_to_id, id_to_token = gpt2_model_load(args.model, sess, args.n_ctx)
         t_load = time.perf_counter() - t_start
 
-        # compute-buffer allocator: reserve once for the worst-case graph
-        allocr = GAllocr.from_backend(backend)
+        # size the compute memory once, for the worst-case graph
         n_tokens = min(model.hparams.n_ctx, args.n_batch)
         n_past_wc = model.hparams.n_ctx - n_tokens
-        gworst, *_ = gpt2_graph(model, model.ctx_graph, n_past_wc, n_tokens)
-        allocr.reserve(gworst)
-        mem_mb = allocr.buffer_size(0) / (1024.0 * 1024.0)
-        print(f"main: compute buffer size: {mem_mb:.2f} MB")
+        with sess.graph() as g:
+            *_, logits_wc = gpt2_graph(model, g, n_past_wc, n_tokens)
+            g.reserve(logits_wc)
+        mem = sum(sess.sched.buffer_size(b) for b in sess.backends)
+        print(f"main: compute buffer size: {mem / (1024.0 * 1024.0):.2f} MB")
 
         # tokenize the prompt
         embd_inp = gpt_tokenize(token_to_id, args.prompt)
@@ -564,7 +516,7 @@ def main():
             # predict
             if len(embd) > 0:
                 t0 = time.perf_counter()
-                logits = gpt2_eval(model, backend, allocr, n_past, embd)
+                logits = gpt2_eval(model, sess, n_past, embd)
                 t_predict += time.perf_counter() - t0
 
             n_past += len(embd)
@@ -603,12 +555,6 @@ def main():
         print(f"main:  predict time = {t_predict * 1000:8.2f} ms"
               f" / {t_predict * 1000 / max(n_past, 1):.2f} ms per token")
         print(f"main:    total time = {(t_main_end - t_main_start) * 1000:8.2f} ms")
-    finally:
-        if allocr is not None:
-            allocr.close()
-        if model is not None:
-            model.close()
-        backend.close()
 
 
 if __name__ == "__main__":

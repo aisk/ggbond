@@ -12,7 +12,9 @@ import numpy as np
 
 import ggml as _ggml
 
-from examples import gpt2
+from examples import gpt2 as gpt2_session
+from examples.ggml import gpt2
+from ggbond import Session
 from ggbond.ggml import Backend, GAllocr
 
 N_VOCAB = 4
@@ -115,6 +117,34 @@ class GPT2ForwardTests(unittest.TestCase):
             )
 
         np.testing.assert_allclose(stepwise, batched, atol=1e-4)
+
+    def test_the_session_example_matches_the_ggml_example(self):
+        tokens = [0, 1, 2, 3, 1, 0, 2]
+        expected = [gpt2.gpt2_eval(self.model, self.backend, self.allocator, 0, tokens[:3])]
+        for position, token in enumerate(tokens[3:], start=3):
+            expected.append(
+                gpt2.gpt2_eval(self.model, self.backend, self.allocator, position, [token])
+            )
+
+        with Session(device="cpu", graph_size=gpt2_session.GPT2_MAX_NODES) as sess:
+            model, _, _ = gpt2_session.gpt2_model_load(self.model_file.name, sess, N_CTX)
+            # The worst-case reservation main() makes, then smaller graphs.
+            with sess.graph() as g:
+                *_, logits = gpt2_session.gpt2_graph(model, g, N_CTX - 4, 4)
+                g.reserve(logits)
+            sizes = [sess.sched.buffer_size(b) for b in sess.backends]
+
+            got = [gpt2_session.gpt2_eval(model, sess, 0, tokens[:3])]
+            for position, token in enumerate(tokens[3:], start=3):
+                got.append(gpt2_session.gpt2_eval(model, sess, position, [token]))
+
+            self.assertEqual([sess.sched.buffer_size(b) for b in sess.backends], sizes)
+            # The key/value cache the graphs wrote is the same as well.
+            np.testing.assert_array_equal(
+                model.memory_k.to_numpy(), self.model.memory_k.to_numpy()
+            )
+        for step, (a, b) in enumerate(zip(expected, got)):
+            np.testing.assert_array_equal(a, b, err_msg=f"step {step}")
 
 
 if __name__ == "__main__":

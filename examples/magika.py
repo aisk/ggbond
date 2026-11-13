@@ -1,4 +1,4 @@
-"""Magika file type detector using ggbond Tensor API.
+"""Magika file type detector using the ggbond high-level API.
 
 Usage:
     python examples/magika.py <model.gguf> <file1> [file2 ...]
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ggbond.ggml import Backend, Context, GAllocr, GGUF, F32, PoolOp
+from ggbond import PoolOp, Session
 
 
 MAGIKA_LABELS = [
@@ -40,13 +40,6 @@ MAGIKA_LABELS = [
 ]
 
 
-def _read_exact(f, size: int, what: str) -> bytes:
-    data = f.read(size)
-    if len(data) != size:
-        raise ValueError(f"truncated model while reading {what}: expected {size} bytes, got {len(data)}")
-    return data
-
-
 @dataclass
 class Prediction:
     """Single file type prediction result."""
@@ -69,27 +62,13 @@ class Magika:
     INP_BYTES = BEG_SIZE + MID_SIZE + END_SIZE
 
     def __init__(self, model_path: str):
-        self._backend = Backend.cpu_init()
-        self._backend.set_n_threads(os.cpu_count() or 4)
-        # GGUF holds the parsed header; its .context holds the weight metadata.
-        # GGUF doesn't read tensor data -- allocate backend buffers, then upload
-        # each tensor's bytes straight from the file (standard ggml pattern).
-        self._gguf = GGUF.from_file(model_path, no_alloc=True)
-        self._backend.alloc_ctx_tensors(self._gguf.context)
-        with open(model_path, "rb") as f:
-            for i in range(self._gguf.n_tensors):
-                name = self._gguf.get_tensor_name(i)
-                t = self._gguf.context.get_tensor(name)
-                if t is None:
-                    raise ValueError(f"GGUF tensor metadata is missing '{name}'")
-                f.seek(self._gguf.data_offset + self._gguf.get_tensor_offset(i))
-                t.write_raw(_read_exact(f, t.nbytes, f"tensor '{name}' data"))
-        self._weights = {
-            self._gguf.get_tensor_name(i): self._gguf.context.get_tensor(
-                self._gguf.get_tensor_name(i)
-            )
-            for i in range(self._gguf.n_tensors)
-        }
+        self._sess = Session()
+        try:
+            # Every tensor of the file becomes a variable, kept until the session closes.
+            self._weights, _ = self._sess.load_gguf(model_path)
+        except BaseException:
+            self._sess.close()
+            raise
 
     def predict(self, files: list[str], *, top_k: int = 5) -> list[list[Prediction]]:
         """Predict file types for a list of files.
@@ -97,20 +76,16 @@ class Magika:
         Returns a list of top-k predictions per file.
         """
         n_files = len(files)
-        input_data = np.concatenate([self._preprocess_file(f) for f in files])
+        input_data = np.stack([self._preprocess_file(f) for f in files])
+        w = self._weights
 
-        # Weights live in self._gguf.context (already allocated). Inputs and
-        # intermediates live in this compute context; GAllocr allocates them.
-        with Context(mem_size=1 << 20, no_alloc=True) as ctx:
-            # Ops whose first operand is a weight go through ``ctx`` so their
-            # results land here, not in the GGUF metadata context (which is
-            # sized only for the weights). A graph may span both contexts.
-            w = self._weights
-
-            inp = ctx.new_tensor_3d(F32, 257, self.INP_BYTES, n_files, name="input").set_input()
+        # The shapes depend on the batch size, so each call builds its own graph.
+        with self._sess.graph() as g:
+            # numpy (n_files, INP_BYTES, 257) is ggml (257, INP_BYTES, n_files)
+            inp = g.input(input_data, name="input")
 
             # dense
-            cur = ctx.mul_mat(w["dense/kernel:0"], inp).add(w["dense/bias:0"]).gelu()
+            cur = w["dense/kernel:0"].mul_mat(inp).add(w["dense/bias:0"]).gelu()
 
             # reshape + transpose
             cur = cur.reshape_3d(512, 384, n_files).transpose().cont()
@@ -119,10 +94,10 @@ class Magika:
             cur = cur.norm(eps=self.F_NORM_EPS).mul(w["layer_normalization/gamma:0"]).add(w["layer_normalization/beta:0"])
 
             # dense_1
-            cur = ctx.mul_mat(w["dense_1/kernel:0"], cur.transpose().cont()).add(w["dense_1/bias:0"]).gelu()
+            cur = w["dense_1/kernel:0"].mul_mat(cur.transpose().cont()).add(w["dense_1/bias:0"]).gelu()
 
             # dense_2
-            cur = ctx.mul_mat(w["dense_2/kernel:0"], cur).add(w["dense_2/bias:0"]).gelu()
+            cur = w["dense_2/kernel:0"].mul_mat(cur).add(w["dense_2/bias:0"]).gelu()
 
             # global_max_pooling1d
             cur = cur.transpose().cont().pool_1d(PoolOp.MAX, 384, 384, 0).reshape_2d(256, n_files)
@@ -131,15 +106,9 @@ class Magika:
             cur = cur.norm(eps=self.F_NORM_EPS).mul(w["layer_normalization_1/gamma:0"]).add(w["layer_normalization_1/beta:0"])
 
             # target_label
-            out = ctx.mul_mat(w["target_label/kernel:0"], cur).add(w["target_label/bias:0"]).soft_max()
-            out.set_output()
+            out = w["target_label/kernel:0"].mul_mat(cur).add(w["target_label/bias:0"]).soft_max()
 
-            graph = ctx.new_graph().build_forward_expand(out)
-            with GAllocr.from_backend(self._backend) as alloc:
-                alloc.alloc_graph(graph)
-                inp.write(input_data.reshape(n_files, self.INP_BYTES, 257))
-                self._backend.compute(graph)
-                all_probs = out.to_numpy().reshape(n_files, self.N_LABEL)
+            all_probs = g.run(out).reshape(n_files, self.N_LABEL)
 
         results = []
         for probs in all_probs:
@@ -150,11 +119,7 @@ class Magika:
         return results
 
     def close(self):
-        # gguf.context (weights) must outlive any graph referencing it; both it
-        # and the gguf_context are owned separately from the backend.
-        self._gguf.context.close()
-        self._gguf.close()
-        self._backend.close()
+        self._sess.close()
 
     def __enter__(self):
         return self
@@ -171,7 +136,7 @@ class Magika:
 
     @classmethod
     def _preprocess_file(cls, fpath: str) -> np.ndarray:
-        """Read file beg/mid/end and convert to one-hot encoding."""
+        """Read file beg/mid/end and convert to one-hot encoding, shape (INP_BYTES, 257)."""
         fsize = os.path.getsize(fpath)
         buf = np.full(cls.INP_BYTES, cls.PADDING_TOKEN, dtype=np.int32)
 
@@ -194,7 +159,7 @@ class Magika:
 
         one_hot = np.zeros((cls.INP_BYTES, 257), dtype=np.float32)
         one_hot[np.arange(cls.INP_BYTES), buf] = 1.0
-        return one_hot.ravel()
+        return one_hot
 
 
 def _expand_paths(paths: list[str]) -> list[str]:

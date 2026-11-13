@@ -5,7 +5,7 @@ import unittest
 
 import ggml as _ggml
 
-from examples import gpt2, magika
+from examples.ggml import gpt2, magika
 from ggbond.ggml import Backend
 
 
