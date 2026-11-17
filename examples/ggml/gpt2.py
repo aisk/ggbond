@@ -1,10 +1,10 @@
 """GPT-2 inference on the ``ggbond.ggml`` OO wrapper.
 
-A faithful port of ggml's ``gpt-2`` ``main-backend`` example to the
-``ggbond.ggml`` API. It reads the *legacy* ggml model format (``ggml-model.bin``
-produced by ggml's convert script -- magic ``ggml``), not GGUF: hparams, the
-inline vocab, and the named weights are parsed straight from the file with plain
-Python I/O, then uploaded into backend-resident tensors.
+A port of ggml's ``gpt-2`` ``main-backend`` example to the ``ggbond.ggml`` API
+that reads a GGUF model: :class:`GGUF` parses the header and fills a metadata
+context with the file's tensors, a backend buffer is allocated for them, and
+the tensor data is uploaded straight from the mapped file. Hyperparameters and
+the vocabulary come from the GGUF metadata.
 
 The two-phase ggml flow is explicit throughout: per token we reset one
 metadata :class:`Context`, build a fresh graph in it, let a reused
@@ -13,38 +13,34 @@ read the last token's logits back into numpy.
 
 Usage::
 
-    python examples/gpt2.py -m models/gpt-2-117M/ggml-model.bin -p "Hello"
-    python examples/gpt2.py -m models/gpt-2-117M/ggml-model.bin -b cuda
+    python examples/ggml/gpt2.py -m models/gpt2.Q8_0.gguf -p "Hello"
+    python examples/ggml/gpt2.py -m models/gpt2.Q8_0.gguf -b metal
 
-Get a model with ggml's gpt-2 ``convert-ckpt-to-ggml.py`` / ``download-model.sh``
-(the legacy ``.bin`` format this example reads).
+Get a model from Hugging Face, where llama.cpp's conversions of GPT-2 are
+published (any quantization works; the tensor and metadata names are the ones
+llama.cpp's ``convert_hf_to_gguf.py`` writes)::
+
+    curl -L -o models/gpt2.Q8_0.gguf \\
+        https://huggingface.co/mradermacher/gpt2-GGUF/resolve/main/gpt2.Q8_0.gguf
 """
 
 import argparse
 import codecs
 import math
+import mmap
 import random
 import re
-import struct
 import time
 
 import numpy as np
 
-import ggml as _ggml  # legacy-format constants + ftype->type conversion only
-from ggbond.ggml import Backend, Context, GAllocr, Tensor, DType, F32, I32
+from ggbond.ggml import GGUF, Backend, Context, GAllocr, Tensor, F32, I32
 
 GPT2_MAX_NODES = 4096
 
 
-def _read_exact(f, size: int, what: str) -> bytes:
-    data = f.read(size)
-    if len(data) != size:
-        raise ValueError(f"truncated model while reading {what}: expected {size} bytes, got {len(data)}")
-    return data
-
-
 # ============================================================================
-# Tokenizer + sampling (model-format independent; ported from common.cpp)
+# Tokenizer + sampling (ported from common.cpp)
 # ============================================================================
 
 def gpt_tokenize(token_to_id: dict[bytes, int], text: str) -> list[int]:
@@ -118,21 +114,58 @@ def gpt_sample_top_k_top_p(
 # Model
 # ============================================================================
 
-class GPT2HParams:
-    def __init__(self, n_vocab, n_ctx, n_embd, n_head, n_layer, eps=1e-5):
-        self.n_vocab = n_vocab
-        self.n_ctx = n_ctx
-        self.n_embd = n_embd
-        self.n_head = n_head
-        self.n_layer = n_layer
-        self.eps = eps
+def _gpt2_byte_decoder() -> dict[str, int]:
+    """Inverse of GPT-2's byte-level alphabet.
+
+    The tokenizer stores every byte of a token as one printable character (a
+    space is ``Ġ``), and that is how a GGUF lists the vocabulary.
+    """
+    printable = (
+        list(range(ord("!"), ord("~") + 1)) + list(range(0xA1, 0xAD)) + list(range(0xAE, 0x100))
+    )
+    decoder = {chr(b): b for b in printable}
+    shifted = (b for b in range(256) if b not in printable)
+    decoder.update({chr(256 + n): b for n, b in enumerate(shifted)})
+    return decoder
 
 
-class GPT2Layer:
-    __slots__ = (
-        "ln_1_g", "ln_1_b", "ln_2_g", "ln_2_b",
-        "c_attn_attn_w", "c_attn_attn_b", "c_attn_proj_w", "c_attn_proj_b",
-        "c_mlp_fc_w", "c_mlp_fc_b", "c_mlp_proj_w", "c_mlp_proj_b",
+def gpt2_vocab(gguf) -> "tuple[dict[bytes, int], dict[int, bytes]]":
+    """The GGUF's vocabulary as raw bytes: (token_to_id, id_to_token).
+
+    Many tokens are not valid UTF-8 on their own, so the vocab is keyed by
+    bytes and matched on bytes.
+    """
+    decoder = _gpt2_byte_decoder()
+    id_to_token = {}
+    for i, token in enumerate(gguf["tokenizer.ggml.tokens"]):
+        try:
+            id_to_token[i] = bytes(decoder[ch] for ch in token)
+        except KeyError:  # not byte-level encoded: keep the text as it is
+            id_to_token[i] = token.encode("utf-8")
+    return {token: i for i, token in id_to_token.items()}, id_to_token
+
+
+def _gpt2_hparams(gguf, n_ctx: int) -> dict:
+    """The numbers the graph needs, read from the GGUF metadata and checked."""
+    arch = gguf.get("general.architecture")
+    if arch != "gpt2":
+        raise ValueError(f"not a GPT-2 model: general.architecture is {arch!r}")
+    n_ctx_train = gguf["gpt2.context_length"]
+    n_embd = gguf["gpt2.embedding_length"]
+    n_head = gguf["gpt2.attention.head_count"]
+    if n_embd % n_head != 0:
+        raise ValueError(f"model embedding size {n_embd} is not divisible by {n_head} heads")
+    if not (0 < n_ctx <= n_ctx_train):
+        raise ValueError(
+            f"requested context size must be between 1 and the trained size {n_ctx_train}, got {n_ctx}"
+        )
+    return dict(
+        n_ctx=n_ctx,  # the *user* context length; the file has the trained one
+        n_embd=n_embd,
+        n_head=n_head,
+        n_layer=gguf["gpt2.block_count"],
+        eps=gguf.get("gpt2.attention.layer_norm_epsilon", 1e-5),
+        eos_token=gguf.get("tokenizer.ggml.eos_token_id", 50256),
     )
 
 
@@ -140,16 +173,16 @@ class GPT2Model:
     """Owns the weight + KV contexts so they outlive every graph built from them,
     and the context each evaluation builds its graph in."""
 
-    def __init__(self):
-        self.hparams = None
-        self.ln_f_g = self.ln_f_b = None
-        self.wte = self.wpe = self.lm_head = None
-        self.layers: list[GPT2Layer] = []
-        self.memory_k = self.memory_v = None
-        self.ctx_w: Context | None = None
+    def __init__(self, ctx_w: Context):
+        self.ctx_w = ctx_w  # the context gguf_init_from_file filled with tensor metadata
         self.ctx_kv: Context | None = None
         # Holds one evaluation's graph at a time; reset before each one.
         self.ctx_graph = Context.for_tensors(0, graph_size=GPT2_MAX_NODES)
+        self.weights: dict[str, Tensor] = {}  # named as in the GGUF
+        self.lm_head = self.memory_k = self.memory_v = None
+        self.n_vocab = self.n_ctx = self.n_embd = self.n_head = self.n_layer = 0
+        self.eps = 1e-5
+        self.eos_token = 50256
 
     def close(self):
         # Both contexts must outlive any graph referencing their tensors; they
@@ -157,201 +190,61 @@ class GPT2Model:
         self.ctx_graph.close()
         if self.ctx_kv is not None:
             self.ctx_kv.close()
-        if self.ctx_w is not None:
-            self.ctx_w.close()
+        self.ctx_w.close()
 
 
 def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
-    """Load a legacy ggml GPT-2 model. Returns (model, token_to_id, id_to_token)."""
+    """Load a GPT-2 GGUF. Returns (model, token_to_id, id_to_token)."""
     print(f"gpt2_model_load: loading model from '{fname}'")
 
-    with open(fname, "rb") as f:
-        # -- verify magic --
-        (magic,) = struct.unpack("<I", _read_exact(f, 4, "magic"))
-        if magic != _ggml.GGML_FILE_MAGIC:
-            raise ValueError(f"invalid model file '{fname}' (bad magic)")
+    # The GGUF handle is only the parsed header: it is closed when loading is
+    # done, while the metadata context it filled stays with the model.
+    with GGUF.from_file(fname, no_alloc=True) as gguf:
+        model = GPT2Model(gguf.context)
+        try:
+            hparams = _gpt2_hparams(gguf, n_ctx)
+            for key, value in hparams.items():
+                print(f"gpt2_model_load: {key:9} = {value}")
+                setattr(model, key, value)
 
-        # -- hparams -- (n_ctx here is the *trained* context length)
-        n_vocab, n_ctx_train, n_embd, n_head, n_layer, ftype = struct.unpack(
-            "<6i", _read_exact(f, 24, "hyperparameters")
-        )
-        if min(n_vocab, n_ctx_train, n_embd, n_head, n_layer) <= 0:
-            raise ValueError("model contains invalid non-positive hyperparameters")
-        if n_embd % n_head != 0:
-            raise ValueError(f"model embedding size {n_embd} is not divisible by {n_head} heads")
-        if not (0 < n_ctx <= n_ctx_train):
-            raise ValueError(
-                f"requested context size must be between 1 and the trained size {n_ctx_train}, got {n_ctx}"
-            )
-        qntvr = ftype // _ggml.GGML_QNT_VERSION_FACTOR
-        print(f"gpt2_model_load: n_vocab = {n_vocab}")
-        print(f"gpt2_model_load: n_ctx   = {n_ctx_train}")
-        print(f"gpt2_model_load: n_embd  = {n_embd}")
-        print(f"gpt2_model_load: n_head  = {n_head}")
-        print(f"gpt2_model_load: n_layer = {n_layer}")
-        print(f"gpt2_model_load: ftype   = {ftype}")
-        print(f"gpt2_model_load: qntvr   = {qntvr}")
-        ftype %= _ggml.GGML_QNT_VERSION_FACTOR
+            # -- weights: one backend buffer for every tensor, filled from the file --
+            buf_w = backend.alloc_ctx_tensors(model.ctx_w)
+            print(f"gpt2_model_load: backend buffer size = {buf_w.size / (1024.0 * 1024.0):6.2f} MB")
+            with open(fname, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+                view = memoryview(mapped)
+                try:
+                    for i in range(gguf.n_tensors):
+                        name = gguf.get_tensor_name(i)
+                        tensor = model.ctx_w.get_tensor(name)
+                        start = gguf.data_offset + gguf.get_tensor_offset(i)
+                        end = start + tensor.nbytes
+                        if end > len(view):
+                            raise ValueError(f"truncated model: tensor '{name}' ends at byte {end} of {len(view)}")
+                        tensor.write_raw(view[start:end])
+                        model.weights[name] = tensor
+                finally:
+                    view.release()
 
-        # type of the big tensors (F16 / quantized) vs the always-F32 small ones
-        wtype = DType(_ggml.ggml_ftype_to_ggml_type(ftype))
+            model.n_vocab = model.weights["token_embd.weight"].ne[1]
+            # llama.cpp's converter writes the tied LM head out as its own
+            # tensor; fall back on the token embedding for a file that does not.
+            model.lm_head = model.weights.get("output.weight", model.weights["token_embd.weight"])
 
-        # -- vocab (read inline, byte-level-encoded UTF-8 strings) --
-        (n_vocab2,) = struct.unpack("<i", _read_exact(f, 4, "vocabulary size"))
-        if n_vocab2 != n_vocab:
-            raise ValueError(f"bad vocab size {n_vocab2} != {n_vocab}")
-        # Tokens are stored as the *raw bytes* of each piece (the convert script
-        # decodes GPT-2's byte-level encoding back to bytes), so many are not
-        # valid UTF-8 on their own. Key the vocab by bytes and match on bytes.
-        token_to_id: dict[bytes, int] = {}
-        id_to_token: dict[int, bytes] = {}
-        for i in range(n_vocab):
-            (length,) = struct.unpack("<I", _read_exact(f, 4, f"token {i} length"))
-            word = _read_exact(f, length, f"token {i}")
-            token_to_id[word] = i
-            id_to_token[i] = word
+            # -- key + value memory (uses the *user* n_ctx) --
+            n_elements = model.n_embd * model.n_layer * n_ctx
+            model.ctx_kv = Context.for_tensors(2)
+            model.memory_k = model.ctx_kv.new_tensor_1d(F32, n_elements)
+            model.memory_v = model.ctx_kv.new_tensor_1d(F32, n_elements)
+            # A fresh backend buffer is uninitialized, and the graph reads the
+            # whole cache range before the mask hides the unwritten part.
+            buf_kv = backend.alloc_ctx_tensors(model.ctx_kv)
+            buf_kv.clear(0)
+            print(f"gpt2_model_load: memory size = {buf_kv.size / (1024.0 * 1024.0):8.2f} MB")
 
-        model = GPT2Model()
-        model.hparams = GPT2HParams(n_vocab, n_ctx, n_embd, n_head, n_layer)
-
-        # -- create the weight tensors (metadata only; no_alloc context) --
-        n_tensors = 2 + 6 + 12 * n_layer
-        ctx_w = Context.for_tensors(n_tensors)
-        model.ctx_w = ctx_w
-
-        tensors: dict[str, Tensor] = {}
-
-        model.ln_f_g = ctx_w.new_tensor_1d(F32, n_embd)
-        model.ln_f_b = ctx_w.new_tensor_1d(F32, n_embd)
-        model.wte = ctx_w.new_tensor_2d(wtype, n_embd, n_vocab)
-        model.wpe = ctx_w.new_tensor_2d(F32, n_embd, n_ctx_train)
-        model.lm_head = ctx_w.new_tensor_2d(wtype, n_embd, n_vocab)
-
-        tensors["model/ln_f/g"] = model.ln_f_g
-        tensors["model/ln_f/b"] = model.ln_f_b
-        tensors["model/wte"] = model.wte
-        tensors["model/wpe"] = model.wpe
-        tensors["model/lm_head"] = model.lm_head
-
-        for i in range(n_layer):
-            layer = GPT2Layer()
-            layer.ln_1_g = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.ln_1_b = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.ln_2_g = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.ln_2_b = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.c_attn_attn_w = ctx_w.new_tensor_2d(wtype, n_embd, 3 * n_embd)
-            layer.c_attn_attn_b = ctx_w.new_tensor_1d(F32, 3 * n_embd)
-            layer.c_attn_proj_w = ctx_w.new_tensor_2d(wtype, n_embd, n_embd)
-            layer.c_attn_proj_b = ctx_w.new_tensor_1d(F32, n_embd)
-            layer.c_mlp_fc_w = ctx_w.new_tensor_2d(wtype, n_embd, 4 * n_embd)
-            layer.c_mlp_fc_b = ctx_w.new_tensor_1d(F32, 4 * n_embd)
-            layer.c_mlp_proj_w = ctx_w.new_tensor_2d(wtype, 4 * n_embd, n_embd)
-            layer.c_mlp_proj_b = ctx_w.new_tensor_1d(F32, n_embd)
-            model.layers.append(layer)
-
-            p = f"model/h{i}"
-            tensors[f"{p}/ln_1/g"] = layer.ln_1_g
-            tensors[f"{p}/ln_1/b"] = layer.ln_1_b
-            tensors[f"{p}/ln_2/g"] = layer.ln_2_g
-            tensors[f"{p}/ln_2/b"] = layer.ln_2_b
-            tensors[f"{p}/attn/c_attn/w"] = layer.c_attn_attn_w
-            tensors[f"{p}/attn/c_attn/b"] = layer.c_attn_attn_b
-            tensors[f"{p}/attn/c_proj/w"] = layer.c_attn_proj_w
-            tensors[f"{p}/attn/c_proj/b"] = layer.c_attn_proj_b
-            tensors[f"{p}/mlp/c_fc/w"] = layer.c_mlp_fc_w
-            tensors[f"{p}/mlp/c_fc/b"] = layer.c_mlp_fc_b
-            tensors[f"{p}/mlp/c_proj/w"] = layer.c_mlp_proj_w
-            tensors[f"{p}/mlp/c_proj/b"] = layer.c_mlp_proj_b
-
-        # allocate a backend buffer for all weight tensors
-        buf_w = backend.alloc_ctx_tensors(ctx_w)
-        size_mb = buf_w.size / (1024.0 * 1024.0)
-        print(f"gpt2_model_load: backend buffer size = {size_mb:6.2f} MB")
-
-        # -- key + value memory (uses the *user* n_ctx) --
-        n_mem = n_layer * n_ctx
-        n_elements = n_embd * n_mem
-        ctx_kv = Context.for_tensors(2)
-        model.ctx_kv = ctx_kv
-        model.memory_k = ctx_kv.new_tensor_1d(F32, n_elements, name="memory_k")
-        model.memory_v = ctx_kv.new_tensor_1d(F32, n_elements, name="memory_v")
-        buf_kv = backend.alloc_ctx_tensors(ctx_kv)
-        buf_kv.clear()  # the buffer is uninitialised; slots not written yet read as zero
-        kv_mb = buf_kv.size / (1024.0 * 1024.0)
-        print(f"gpt2_model_load: memory size = {kv_mb:8.2f} MB, n_mem = {n_mem}")
-
-        # -- load weights --
-        total_size = 0
-        has_lm_head = False
-        loaded_names = set()
-        while True:
-            header = f.read(12)
-            if not header:
-                break  # EOF
-            if len(header) != 12:
-                raise ValueError(
-                    f"truncated model while reading tensor header: expected 12 bytes, got {len(header)}"
-                )
-            n_dims, length, ttype = struct.unpack("<3i", header)
-            if n_dims not in (1, 2):
-                raise ValueError(f"invalid tensor dimension count {n_dims}")
-            if length < 0:
-                raise ValueError(f"invalid negative tensor name length {length}")
-            ne = [1, 1]
-            nelements = 1
-            for i in range(n_dims):
-                (ne[i],) = struct.unpack(
-                    "<i", _read_exact(f, 4, f"tensor dimension {i}")
-                )
-                if ne[i] <= 0:
-                    raise ValueError(f"invalid tensor dimension {ne[i]}")
-                nelements *= ne[i]
-            name = _read_exact(f, length, "tensor name").decode("utf-8")
-
-            if name not in tensors:
-                raise ValueError(f"unknown tensor '{name}' in model file")
-            if name in loaded_names:
-                raise ValueError(f"duplicate tensor '{name}' in model file")
-            tensor = tensors[name]
-            tensor.name = name
-
-            if ttype != int(tensor.dtype):
-                raise ValueError(
-                    f"tensor '{name}' has type {ttype}, expected {int(tensor.dtype)} ({tensor.dtype.name})"
-                )
-
-            if tensor.nelements != nelements:
-                raise ValueError(f"tensor '{name}' has wrong size in model file")
-            if list(tensor.ne[:2]) != ne:
-                raise ValueError(
-                    f"tensor '{name}' has wrong shape: got {ne[:n_dims]}, "
-                    f"expected {list(tensor.ne[:n_dims])}"
-                )
-
-            tensor.write_raw(_read_exact(f, tensor.nbytes, f"tensor '{name}' data"))
-            loaded_names.add(name)
-
-            # GPT-2 ties the LM head to the token embedding (wte) unless the file
-            # carries an explicit lm_head.
-            if name == "model/wte" and not has_lm_head:
-                model.lm_head = tensor
-            if name == "model/lm_head":
-                has_lm_head = True
-                model.lm_head = tensor
-
-            total_size += tensor.nbytes
-
-        required_names = set(tensors)
-        required_names.discard("model/lm_head")  # optional: tied to model/wte
-        missing = sorted(required_names - loaded_names)
-        if missing:
-            preview = ", ".join(missing[:5])
-            suffix = " ..." if len(missing) > 5 else ""
-            raise ValueError(f"model is missing {len(missing)} required tensors: {preview}{suffix}")
-
-        print(f"gpt2_model_load: model size  = {total_size / 1024.0 / 1024.0:8.2f} MB")
-
-    return model, token_to_id, id_to_token
+            return (model, *gpt2_vocab(gguf))
+        except BaseException:
+            model.close()
+            raise
 
 
 # ============================================================================
@@ -361,8 +254,8 @@ def gpt2_model_load(fname: str, backend: Backend, n_ctx: int):
 def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
     """Build the forward graph in ``ctx``. Returns (graph, embd, position, logits)."""
     N = n_tokens
-    hp = model.hparams
-    n_embd, n_layer, n_ctx, n_head = hp.n_embd, hp.n_layer, hp.n_ctx, hp.n_head
+    w = model.weights
+    n_embd, n_layer, n_ctx, n_head = model.n_embd, model.n_layer, model.n_ctx, model.n_head
 
     # Weights and the KV cache live in the model's own contexts, which are
     # sized only for their metadata. Ops whose first operand is one of them go
@@ -377,17 +270,23 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
     embd = ctx.new_tensor_1d(I32, N, name="embd").set_input()
     position = ctx.new_tensor_1d(I32, N, name="position").set_input()
 
-    # wte + wpe
-    inpL = ctx.get_rows(model.wte, embd).add(ctx.get_rows(model.wpe, position))
+    def norm(x, name):  # layer norm with the gain and bias called ``name``
+        return x.norm(model.eps).mul(w[f"{name}.weight"]).add(w[f"{name}.bias"])
+
+    def linear(x, name):
+        return ctx.mul_mat(w[f"{name}.weight"], x).add(w[f"{name}.bias"])
+
+    # token + position embedding
+    inpL = ctx.get_rows(w["token_embd.weight"], embd).add(ctx.get_rows(w["position_embd.weight"], position))
 
     for il in range(n_layer):
-        layer = model.layers[il]
+        blk = f"blk.{il}"
 
         # ln_1
-        cur = inpL.norm(hp.eps).mul(layer.ln_1_g).add(layer.ln_1_b)
+        cur = norm(inpL, f"{blk}.attn_norm")
 
         # attention: fused QKV projection -> [3*n_embd, N]
-        cur = ctx.mul_mat(layer.c_attn_attn_w, cur).add(layer.c_attn_attn_b)
+        cur = linear(cur, f"{blk}.attn_qkv")
 
         # row stride of the contiguous [3*n_embd, N] QKV tensor
         nb1 = cur.nb[1]
@@ -430,22 +329,22 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
         cur = KQV.permute(0, 2, 1, 3).cont_2d(n_embd, N)
 
         # attention output projection
-        cur = ctx.mul_mat(layer.c_attn_proj_w, cur).add(layer.c_attn_proj_b)
+        cur = linear(cur, f"{blk}.attn_output")
 
         # residual
         cur = cur.add(inpL)
         inpFF = cur
 
         # ln_2 + MLP
-        cur = inpFF.norm(hp.eps).mul(layer.ln_2_g).add(layer.ln_2_b)
-        cur = ctx.mul_mat(layer.c_mlp_fc_w, cur).add(layer.c_mlp_fc_b).gelu()
-        cur = ctx.mul_mat(layer.c_mlp_proj_w, cur).add(layer.c_mlp_proj_b)
+        cur = norm(inpFF, f"{blk}.ffn_norm")
+        cur = linear(cur, f"{blk}.ffn_up").gelu()
+        cur = linear(cur, f"{blk}.ffn_down")
 
         # residual
         inpL = cur.add(inpFF)
 
     # final norm
-    inpL = inpL.norm(hp.eps).mul(model.ln_f_g).add(model.ln_f_b)
+    inpL = norm(inpL, "output_norm")
 
     # logits = lm_head * inpL
     logits = ctx.mul_mat(model.lm_head, inpL)
@@ -463,7 +362,7 @@ def gpt2_graph(model: GPT2Model, ctx: Context, n_past: int, n_tokens: int):
 def gpt2_eval(model, backend, allocr, n_past, embd_inp) -> np.ndarray:
     """Run the transformer and return logits for the last token."""
     N = len(embd_inp)
-    n_vocab = model.hparams.n_vocab
+    n_vocab = model.n_vocab
     # Reuse one metadata context for every evaluation: ggml_reset empties it,
     # which also retires the previous evaluation's tensors and graph.
     ctx = model.ctx_graph
@@ -501,8 +400,8 @@ def _init_backend(kind: str, device: int) -> Backend:
 
 def main():
     parser = argparse.ArgumentParser(description="GPT-2 inference on the ggbond.ggml API")
-    parser.add_argument("-m", "--model", default="models/gpt-2-117M/ggml-model.bin",
-                        help="Path to a legacy ggml GPT-2 model (.bin)")
+    parser.add_argument("-m", "--model", default="models/gpt2.Q8_0.gguf",
+                        help="Path to a GPT-2 model in GGUF format")
     parser.add_argument("-p", "--prompt", default="Hello, my name is", help="Input prompt")
     parser.add_argument("-n", "--n-predict", type=int, default=200, help="Tokens to predict")
     parser.add_argument("--n-ctx", type=int, default=1024, help="Context size")
@@ -535,8 +434,8 @@ def main():
 
         # compute-buffer allocator: reserve once for the worst-case graph
         allocr = GAllocr.from_backend(backend)
-        n_tokens = min(model.hparams.n_ctx, args.n_batch)
-        n_past_wc = model.hparams.n_ctx - n_tokens
+        n_tokens = min(model.n_ctx, args.n_batch)
+        n_past_wc = model.n_ctx - n_tokens
         gworst, *_ = gpt2_graph(model, model.ctx_graph, n_past_wc, n_tokens)
         allocr.reserve(gworst)
         mem_mb = allocr.buffer_size(0) / (1024.0 * 1024.0)
@@ -544,7 +443,7 @@ def main():
 
         # tokenize the prompt
         embd_inp = gpt_tokenize(token_to_id, args.prompt)
-        n_predict = min(args.n_predict, model.hparams.n_ctx - len(embd_inp))
+        n_predict = min(args.n_predict, model.n_ctx - len(embd_inp))
 
         print(f"main: prompt: '{args.prompt}'")
         print(f"main: number of tokens in prompt = {len(embd_inp)}, "
@@ -592,7 +491,7 @@ def main():
                 piece = decoder.decode(id_to_token.get(token_id, b""))
                 print(piece, end="", flush=True)
 
-            if embd[-1] == 50256:  # end-of-text
+            if embd[-1] == model.eos_token:  # end-of-text
                 break
 
             i += 1
